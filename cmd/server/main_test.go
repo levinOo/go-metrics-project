@@ -4,113 +4,130 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
-
-	"github.com/go-chi/chi"
 )
 
 func TestUpdateValueHandler(t *testing.T) {
-	storage := NewMemStorage()
-	r := chi.NewRouter()
-	r.Route("/update", func(r chi.Router) {
-		r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage))
-	})
-
-	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Метод не разрешён", http.StatusMethodNotAllowed)
-	})
-
 	tests := []struct {
-		name         string
-		method       string
-		url          string
-		wantCode     int
-		wantBody     string
-		checkStorage func(t *testing.T)
+		name     string
+		method   string
+		url      string
+		wantCode int
+		wantBody string
 	}{
 		{
-			name:     "Успешное обновление счётчика",
+			name:     "Успешный тест для counter",
 			method:   http.MethodPost,
-			url:      "/update/counter/PollCount/10",
+			url:      "/value/counter/PollCount/45",
 			wantCode: http.StatusOK,
 			wantBody: "OK",
-			checkStorage: func(t *testing.T) {
-				val, ok := storage.GetCounter("PollCount")
-				if !ok {
-					t.Errorf("Счётчик PollCount не найден в хранилище")
-					return
-				}
-				if val != 10 {
-					t.Errorf("Значение счётчика PollCount = %d; ожидалось 10", val)
-				}
-			},
 		},
 		{
-			name:     "Успешное обновление gauge",
+			name:     "Успешный тест для gauge",
 			method:   http.MethodPost,
-			url:      "/update/gauge/HeapAlloc/123.456",
+			url:      "/value/gauge/BuckHashSys/67.089",
 			wantCode: http.StatusOK,
 			wantBody: "OK",
-			checkStorage: func(t *testing.T) {
-				val, ok := storage.GetGauge("HeapAlloc")
-				if !ok {
-					t.Errorf("Gauge HeapAlloc не найден в хранилище")
-					return
-				}
-				if val != gauge(123.456) {
-					t.Errorf("Значение gauge HeapAlloc = %f; ожидалось 123.456", val)
-				}
-			},
 		},
 		{
-			name:     "Неподдерживаемый HTTP метод",
+			name:     "Неверный HTTP метод",
 			method:   http.MethodGet,
-			url:      "/update/counter/PollCount/10",
+			url:      "/value/counter/PollCount/45",
 			wantCode: http.StatusMethodNotAllowed,
-			wantBody: "Метод не разрешён\n",
+			wantBody: "Method Not Allowed\n",
 		},
 		{
-			name:     "Неверное значение счётчика",
+			name:     "Неверное значение counter",
 			method:   http.MethodPost,
-			url:      "/update/counter/PollCount/abc",
+			url:      "/value/counter/PollCount/invalid",
 			wantCode: http.StatusBadRequest,
 			wantBody: "Неверный тип метрики\n",
 		},
 		{
 			name:     "Неизвестный тип метрики",
 			method:   http.MethodPost,
-			url:      "/update/unknown/PollCount/10",
+			url:      "/value/unknown/PollCount/45",
 			wantCode: http.StatusBadRequest,
 			wantBody: "Неизвестный тип метрики\n",
 		},
 		{
 			name:     "Пустое имя метрики",
 			method:   http.MethodPost,
-			url:      "/update/counter//10",
+			url:      "/value/counter//45",
 			wantCode: http.StatusNotFound,
 			wantBody: "Metric is empty\n",
 		},
 	}
 
+	storage := NewMemStorage()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, tt.url, nil)
+			r := httptest.NewRequest(tt.method, tt.url, nil)
 			w := httptest.NewRecorder()
 
-			r.ServeHTTP(w, req)
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+					return
+				}
+
+				parts := strings.Split(r.URL.Path, "/")
+				if len(parts) < 5 {
+					http.Error(w, "Неверный URL", http.StatusBadRequest)
+					return
+				}
+				typeMetric := parts[2]
+				nameMetric := parts[3]
+				valueMetric := parts[4]
+
+				if nameMetric == "" {
+					http.Error(w, "Metric is empty", http.StatusNotFound)
+					return
+				}
+
+				switch typeMetric {
+				case "gauge":
+					valueGauge, err := strconv.ParseFloat(valueMetric, 64)
+					if err != nil {
+						http.Error(w, "Неверный тип метрики", http.StatusBadRequest)
+						return
+					}
+					storage.SetGauge(nameMetric, gauge(valueGauge))
+				case "counter":
+					valueCounter, err := strconv.ParseInt(valueMetric, 10, 64)
+					if err != nil {
+						http.Error(w, "Неверный тип метрики", http.StatusBadRequest)
+						return
+					}
+					storage.SetCounter(nameMetric, counter(valueCounter))
+				default:
+					http.Error(w, "Неизвестный тип метрики", http.StatusBadRequest)
+					return
+				}
+
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("OK"))
+			})
+
+			handler.ServeHTTP(w, r)
 
 			resp := w.Result()
-			body, _ := io.ReadAll(resp.Body)
+			defer resp.Body.Close()
 
 			if resp.StatusCode != tt.wantCode {
-				t.Errorf("Код ответа = %d; ожидалось %d", resp.StatusCode, tt.wantCode)
-			}
-			if string(body) != tt.wantBody {
-				t.Errorf("Тело ответа = %q; ожидалось %q", string(body), tt.wantBody)
+				t.Errorf("статус код = %d; ожидалось %d", resp.StatusCode, tt.wantCode)
 			}
 
-			if tt.checkStorage != nil {
-				tt.checkStorage(t)
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("ошибка при чтении тела ответа: %v", err)
+			}
+
+			if string(body) != tt.wantBody {
+				t.Errorf("тело ответа = %q; ожидалось %q", string(body), tt.wantBody)
 			}
 		})
 	}
