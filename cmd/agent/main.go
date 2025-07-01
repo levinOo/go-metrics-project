@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"math/rand"
 	"net/http"
@@ -133,13 +134,23 @@ func NewMetricsStorage() *Metrics {
 	return &Metrics{}
 }
 
+var (
+	addr         = flag.String("a", "localhost:8080", "Адрес сервера")
+	pollInterval = flag.Int("p", 2, "Значение интервала обновления метрик в секундах")
+	reqInterval  = flag.Int("r", 10, "Значение интервала отпрвки в секундах")
+)
+
 func main() {
+	flag.Parse()
+	if len(flag.Args()) > 0 {
+		log.Fatalf("Неизвестные аргументы: %v", flag.Args())
+	}
 
 	m := NewMetricsStorage()
-	endpoint := "http://localhost:8080"
+	endpoint := "http://" + *addr
 
-	pollTicker := time.Second * 2
-	reqTicker := time.Second * 10
+	pollTicker := time.Second * time.Duration(*pollInterval)
+	reqTicker := time.Second * time.Duration(*reqInterval)
 
 	pollTime := time.Now()
 	reqTime := time.Now()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -159,8 +160,13 @@ func (m *MemStorage) GetCounter(name string) (counter, bool) {
 	return val, ok
 }
 
-func main() {
+var addr = flag.String("a", "localhos:8080", "Адрес сервера")
 
+func main() {
+	flag.Parse()
+	if len(flag.Args()) > 0 {
+		log.Fatalf("Неизвестные аргументы: %v", flag.Args())
+	}
 	storage := NewMemStorage()
 	r := chi.NewRouter()
 
@@ -174,7 +180,7 @@ func main() {
 		})
 	})
 
-	err := http.ListenAndServe("localhost:8080", r)
+	err := http.ListenAndServe(*addr, r)
 	if err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)
 	}
