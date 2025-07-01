@@ -160,7 +160,7 @@ func (m *MemStorage) GetCounter(name string) (counter, bool) {
 	return val, ok
 }
 
-var addr = flag.String("a", "localhos:8080", "Адрес сервера")
+var addr = flag.String("a", "localhost:8080", "Адрес сервера")
 
 func main() {
 	flag.Parse()
