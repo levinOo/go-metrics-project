@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/go-chi/chi"
@@ -13,12 +15,6 @@ type (
 	gauge   float64
 	counter int64
 )
-
-type MemStorage struct {
-	mu       sync.Mutex
-	Gauges   map[string]gauge
-	Counters map[string]counter
-}
 
 func UpdateValueHandler(storage *MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -36,28 +32,91 @@ func UpdateValueHandler(storage *MemStorage) http.HandlerFunc {
 		case "gauge":
 			valueGauge, err := strconv.ParseFloat(valueMetric, 64)
 			if err != nil {
-				http.Error(rw, "Неверный тип метрики", http.StatusBadRequest)
+				http.Error(rw, "Invalid type of value", http.StatusBadRequest)
 				return
 			}
 			storage.SetGauge(nameMetric, gauge(valueGauge))
 		case "counter":
 			valueCounter, err := strconv.ParseInt(valueMetric, 10, 64)
 			if err != nil {
-				http.Error(rw, "Неверный тип метрики", http.StatusBadRequest)
+				http.Error(rw, "Invalid type of value", http.StatusBadRequest)
 				return
 			}
 			storage.SetCounter(nameMetric, counter(valueCounter))
 		default:
-			http.Error(rw, "Неизвестный тип метрики", http.StatusBadRequest)
+			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
 			return
 		}
 		rw.WriteHeader(http.StatusOK)
 		_, err := rw.Write([]byte("OK"))
 		if err != nil {
-			log.Printf("Ошиька вывода: %v", err)
+			log.Printf("write error: %v", err)
 		}
 
 	}
+}
+
+func GetValueHandler(storage *MemStorage) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+
+		nameMetric := chi.URLParam(r, "metric")
+
+		switch chi.URLParam(r, "typeMetric") {
+		case "gauge":
+			val, ok := storage.GetGauge(nameMetric)
+			if ok {
+				rw.WriteHeader(http.StatusOK)
+				_, err := rw.Write([]byte(fmt.Sprintf("%g", val)))
+				if err != nil {
+					log.Printf("write error: %v", err)
+				}
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+				return
+			}
+		case "counter":
+			val, ok := storage.GetCounter(nameMetric)
+			if ok {
+				rw.WriteHeader(http.StatusOK)
+				_, err := rw.Write([]byte(fmt.Sprintf("%d", val)))
+				if err != nil {
+					log.Printf("write error: %v", err)
+				}
+			} else {
+				rw.WriteHeader(http.StatusNotFound)
+				return
+			}
+		default:
+			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			return
+		}
+	}
+}
+
+func GetListHandler(storage *MemStorage) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+
+		var sb strings.Builder
+
+		for name, val := range storage.Gauges {
+			sb.WriteString(fmt.Sprintf("%s: %f\n", name, val))
+		}
+		for name, val := range storage.Counters {
+			sb.WriteString(fmt.Sprintf("%s: %d\n", name, val))
+		}
+
+		_, err := rw.Write([]byte(sb.String()))
+		if err != nil {
+			log.Printf("write error: %v", err)
+		}
+
+	}
+}
+
+type MemStorage struct {
+	mu       sync.Mutex
+	Gauges   map[string]gauge
+	Counters map[string]counter
 }
 
 type MetricsStorage interface {
@@ -105,8 +164,14 @@ func main() {
 	storage := NewMemStorage()
 	r := chi.NewRouter()
 
-	r.Route("/update", func(r chi.Router) {
-		r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage))
+	r.Route("/", func(r chi.Router) {
+		r.Get("/", GetListHandler(storage))
+		r.Route("/update", func(r chi.Router) {
+			r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage))
+		})
+		r.Route("/value", func(r chi.Router) {
+			r.Get("/{typeMetric}/{metric}", GetValueHandler(storage))
+		})
 	})
 
 	err := http.ListenAndServe("localhost:8080", r)
