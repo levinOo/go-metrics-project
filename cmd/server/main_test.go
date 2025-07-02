@@ -1,133 +1,118 @@
 package main
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
 	"testing"
+
+	"github.com/go-chi/chi"
+	"github.com/levinOo/go-metrics-project/internal/handler"
+	"github.com/levinOo/go-metrics-project/internal/repository"
 )
 
-func TestUpdateValueHandler(t *testing.T) {
+func TestGetValueHandler(t *testing.T) {
+	type want struct {
+		code        int
+		contentType string
+		body        string
+		method      string
+	}
+
 	tests := []struct {
-		name     string
-		method   string
-		url      string
-		wantCode int
-		wantBody string
+		name   string
+		method string
+		url    string
+		setup  func(repository.MemStorage)
+		want   want
 	}{
 		{
-			name:     "Успешный тест для counter",
-			method:   http.MethodPost,
-			url:      "/value/counter/PollCount/45",
-			wantCode: http.StatusOK,
-			wantBody: "OK",
+			name:   "Get existing gauge",
+			method: http.MethodGet,
+			url:    "/value/gauge/HeapSys",
+			setup: func(storage repository.MemStorage) {
+				storage.SetGauge("HeapSys", 123.456)
+			},
+			want: want{
+				code:        http.StatusOK,
+				contentType: "",
+				body:        "123.456",
+				method:      http.MethodGet,
+			},
 		},
 		{
-			name:     "Успешный тест для gauge",
-			method:   http.MethodPost,
-			url:      "/value/gauge/BuckHashSys/67.089",
-			wantCode: http.StatusOK,
-			wantBody: "OK",
+			name:   "Get existing counter",
+			method: http.MethodGet,
+			url:    "/value/counter/PollCount",
+			setup: func(storage repository.MemStorage) {
+				storage.SetCounter("PollCount", 42)
+			},
+			want: want{
+				code:        http.StatusOK,
+				contentType: "",
+				body:        "42",
+				method:      http.MethodGet,
+			},
 		},
 		{
-			name:     "Неверный HTTP метод",
-			method:   http.MethodGet,
-			url:      "/value/counter/PollCount/45",
-			wantCode: http.StatusMethodNotAllowed,
-			wantBody: "Method Not Allowed\n",
+			name:   "Get missing gauge",
+			method: http.MethodGet,
+			url:    "/value/gauge/NotExist",
+			setup: func(storage repository.MemStorage) {
+				// не добавляем значение
+			},
+			want: want{
+				code: http.StatusNotFound,
+			},
 		},
 		{
-			name:     "Неверное значение counter",
-			method:   http.MethodPost,
-			url:      "/value/counter/PollCount/invalid",
-			wantCode: http.StatusBadRequest,
-			wantBody: "Неверный тип метрики\n",
+			name:   "Get missing counter",
+			method: http.MethodGet,
+			url:    "/value/counter/NotExist",
+			setup: func(storage repository.MemStorage) {
+			},
+			want: want{
+				code: http.StatusNotFound,
+			},
 		},
 		{
-			name:     "Неизвестный тип метрики",
-			method:   http.MethodPost,
-			url:      "/value/unknown/PollCount/45",
-			wantCode: http.StatusBadRequest,
-			wantBody: "Неизвестный тип метрики\n",
-		},
-		{
-			name:     "Пустое имя метрики",
-			method:   http.MethodPost,
-			url:      "/value/counter//45",
-			wantCode: http.StatusNotFound,
-			wantBody: "Metric is empty\n",
+			name:   "Unknown metric type",
+			method: http.MethodGet,
+			url:    "/value/unknown/Metric",
+			setup:  func(storage repository.MemStorage) {},
+			want: want{
+				code:        http.StatusBadRequest,
+				contentType: "text/plain; charset=utf-8",
+				body:        "Unknown type of metric\n",
+			},
 		},
 	}
 
-	storage := NewMemStorage()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest(tt.method, tt.url, nil)
-			w := httptest.NewRecorder()
+			storage := repository.NewMemStorage()
+			tt.setup(*storage)
 
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-					return
-				}
+			r := chi.NewRouter()
+			r.Get("/value/{typeMetric}/{metric}", handler.GetValueHandler(storage))
 
-				parts := strings.Split(r.URL.Path, "/")
-				if len(parts) < 5 {
-					http.Error(w, "Неверный URL", http.StatusBadRequest)
-					return
-				}
-				typeMetric := parts[2]
-				nameMetric := parts[3]
-				valueMetric := parts[4]
+			req := httptest.NewRequest(tt.method, tt.url, nil)
+			rec := httptest.NewRecorder()
 
-				if nameMetric == "" {
-					http.Error(w, "Metric is empty", http.StatusNotFound)
-					return
-				}
+			r.ServeHTTP(rec, req)
 
-				switch typeMetric {
-				case "gauge":
-					valueGauge, err := strconv.ParseFloat(valueMetric, 64)
-					if err != nil {
-						http.Error(w, "Неверный тип метрики", http.StatusBadRequest)
-						return
-					}
-					storage.SetGauge(nameMetric, gauge(valueGauge))
-				case "counter":
-					valueCounter, err := strconv.ParseInt(valueMetric, 10, 64)
-					if err != nil {
-						http.Error(w, "Неверный тип метрики", http.StatusBadRequest)
-						return
-					}
-					storage.SetCounter(nameMetric, counter(valueCounter))
-				default:
-					http.Error(w, "Неизвестный тип метрики", http.StatusBadRequest)
-					return
-				}
-
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte("OK"))
-			})
-
-			handler.ServeHTTP(w, r)
-
-			resp := w.Result()
-			defer resp.Body.Close()
-
-			if resp.StatusCode != tt.wantCode {
-				t.Errorf("статус код = %d; ожидалось %d", resp.StatusCode, tt.wantCode)
+			if rec.Code != tt.want.code {
+				t.Errorf("got status %d, want %d", rec.Code, tt.want.code)
 			}
 
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatalf("ошибка при чтении тела ответа: %v", err)
+			if tt.want.contentType != "" {
+				gotType := rec.Header().Get("Content-Type")
+				if gotType != tt.want.contentType {
+					t.Errorf("got content-type %q, want %q", gotType, tt.want.contentType)
+				}
 			}
 
-			if string(body) != tt.wantBody {
-				t.Errorf("тело ответа = %q; ожидалось %q", string(body), tt.wantBody)
+			if tt.want.body != "" && rec.Body.String() != tt.want.body {
+				t.Errorf("got body %q, want %q", rec.Body.String(), tt.want.body)
 			}
 		})
 	}
