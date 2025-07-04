@@ -11,6 +11,10 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# macOS system file
+.DS_Store
+
+
 # Binaries
 cmd/agent/main
 cmd/agent/agent
