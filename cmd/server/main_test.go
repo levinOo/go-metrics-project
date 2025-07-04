@@ -102,17 +102,20 @@ func TestGetValueHandler(t *testing.T) {
 
 			if rec.Code != tt.want.code {
 				t.Errorf("got status %d, want %d", rec.Code, tt.want.code)
+				return
 			}
 
 			if tt.want.contentType != "" {
 				gotType := rec.Header().Get("Content-Type")
 				if gotType != tt.want.contentType {
 					t.Errorf("got content-type %q, want %q", gotType, tt.want.contentType)
+					return
 				}
 			}
 
 			if tt.want.body != "" && rec.Body.String() != tt.want.body {
 				t.Errorf("got body %q, want %q", rec.Body.String(), tt.want.body)
+				return
 			}
 		})
 	}

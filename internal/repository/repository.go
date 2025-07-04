@@ -1,6 +1,9 @@
 package repository
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 type (
 	Gauge   float64
@@ -27,11 +30,14 @@ func (m *MemStorage) SetGauge(name string, value Gauge) {
 	m.Gauges[name] = value
 }
 
-func (m *MemStorage) GetGauge(name string) (Gauge, bool) {
+func (m *MemStorage) GetGauge(name string) (val Gauge, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	val, ok := m.Gauges[name]
-	return val, ok
+	if !ok {
+		err = errors.New("Failed to get metric correctly")
+	}
+	return val, err
 }
 
 func (m *MemStorage) SetCounter(name string, value Counter) {
@@ -40,9 +46,12 @@ func (m *MemStorage) SetCounter(name string, value Counter) {
 	m.Counters[name] += value
 }
 
-func (m *MemStorage) GetCounter(name string) (Counter, bool) {
+func (m *MemStorage) GetCounter(name string) (val Counter, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	val, ok := m.Counters[name]
-	return val, ok
+	if !ok {
+		err = errors.New("Failed to get metric correctly")
+	}
+	return val, err
 }

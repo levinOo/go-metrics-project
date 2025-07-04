@@ -83,28 +83,28 @@ func GetValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 		switch chi.URLParam(r, "typeMetric") {
 		case "gauge":
-			val, ok := storage.GetGauge(nameMetric)
-			if ok {
-				rw.WriteHeader(http.StatusOK)
-				_, err := rw.Write([]byte(fmt.Sprintf("%g", val)))
-				if err != nil {
-					log.Printf("write error: %v", err)
-				}
-			} else {
+			val, err := storage.GetGauge(nameMetric)
+			if err != nil {
+				log.Printf("write error: %v", err)
 				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
+			rw.WriteHeader(http.StatusOK)
+			_, err = rw.Write([]byte(fmt.Sprintf("%g", val)))
+			if err != nil {
+				log.Printf("write error: %v", err)
+			}
 		case "counter":
-			val, ok := storage.GetCounter(nameMetric)
-			if ok {
-				rw.WriteHeader(http.StatusOK)
-				_, err := rw.Write([]byte(fmt.Sprintf("%d", val)))
-				if err != nil {
-					log.Printf("write error: %v", err)
-				}
-			} else {
+			val, err := storage.GetCounter(nameMetric)
+			if err != nil {
+				log.Printf("write error: %v", err)
 				rw.WriteHeader(http.StatusNotFound)
 				return
+			}
+			rw.WriteHeader(http.StatusOK)
+			_, err = rw.Write([]byte(fmt.Sprintf("%d", val)))
+			if err != nil {
+				log.Printf("write error: %v", err)
 			}
 		default:
 			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
