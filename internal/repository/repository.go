@@ -35,7 +35,7 @@ func (m *MemStorage) GetGauge(name string) (val Gauge, err error) {
 	defer m.mu.Unlock()
 	val, ok := m.Gauges[name]
 	if !ok {
-		err = errors.New("Failed to get metric correctly")
+		err = errors.New("failed to get metric correctly")
 	}
 	return val, err
 }
@@ -51,7 +51,7 @@ func (m *MemStorage) GetCounter(name string) (val Counter, err error) {
 	defer m.mu.Unlock()
 	val, ok := m.Counters[name]
 	if !ok {
-		err = errors.New("Failed to get metric correctly")
+		err = errors.New("failed to get metric correctly")
 	}
 	return val, err
 }
