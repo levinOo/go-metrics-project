@@ -1,16 +1,21 @@
 package config
 
-import "flag"
+import (
+	"flag"
+
+	"github.com/caarlos0/env"
+)
 
 type Config struct {
-	cfg string
+	Addr string `env:"ADDRESS"`
 }
 
-func GetConfig() string {
+func GetConfig() (string, error) {
 	cfg := Config{}
-	flag.StringVar(&cfg.cfg, "a", "localhost:8080", "addres of HTTP server")
-
+	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "addres of HTTP server")
 	flag.Parse()
 
-	return cfg.cfg
+	err := env.Parse(&cfg)
+
+	return cfg.Addr, err
 }
