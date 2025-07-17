@@ -2,15 +2,23 @@ package agent
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
 	"time"
 
+	"github.com/caarlos0/env/v11"
 	"github.com/go-resty/resty/v2"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
 )
+
+type Config struct {
+	Addr         string `env:"ADDRESS"`
+	PollInterval int    `env:"REPORT_INTERVAL"`
+	ReqInterval  int    `env:"POLL_INTERVAL"`
+}
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 	url, err := url.JoinPath(endpoint, "update", metricType, metricName, metricValue)
@@ -56,20 +64,26 @@ func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error
 }
 
 func StartAgent() <-chan error {
-
-	addr := flag.String("a", "localhost:8080", "Адрес сервера")
-	pollInterval := flag.Int("p", 2, "Значение интервала обновления метрик в секундах")
-	reqInterval := flag.Int("r", 10, "Значение интервала отпрвки в секундах")
-	flag.Parse()
-
-	m := store.NewMetricsStorage()
-	endpoint := "http://" + *addr
-
+	cfg := Config{}
 	errCh := make(chan error)
 
+	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "Адрес сервера")
+	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
+	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
+	flag.Parse()
+
+	err := env.Parse(&cfg)
+	if err != nil {
+		errCh <- fmt.Errorf("ошибка парсинга ENV: %w", err)
+		return errCh
+	}
+
+	m := store.NewMetricsStorage()
+	endpoint := "http://" + cfg.Addr
+
 	go func() {
-		pollTicker := time.NewTicker(time.Second * time.Duration(*pollInterval))
-		reqTicker := time.NewTicker(time.Second * time.Duration(*reqInterval))
+		pollTicker := time.NewTicker(time.Second * time.Duration((cfg.PollInterval)))
+		reqTicker := time.NewTicker(time.Second * time.Duration((cfg.ReqInterval)))
 
 		for {
 			select {
