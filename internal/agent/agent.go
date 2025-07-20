@@ -12,6 +12,7 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/go-resty/resty/v2"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
+	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
 type Config struct {
@@ -21,15 +22,39 @@ type Config struct {
 }
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
-	url, err := url.JoinPath(endpoint, "update", metricType, metricName, metricValue)
+	url, err := url.JoinPath(endpoint, "update")
 	if err != nil {
 		return err
 	}
 
+	var metric models.Metrics
+	metric.ID = metricName
+	metric.MType = metricType
+
+	switch metricType {
+	case "gauge":
+		val, err := strconv.ParseFloat(metricValue, 64)
+		if err != nil {
+			return err
+		}
+		metric.Value = &val
+	case "counter":
+		val, err := strconv.ParseInt(metricValue, 10, 64)
+		if err != nil {
+			return err
+		}
+		metric.Delta = &val
+	default:
+		return fmt.Errorf("unsupported metric type: %s", metricType)
+	}
+
 	client := resty.New()
-	client.SetHeader("Content-Type", "text/plain")
+	client.SetHeader("Content-Type", "application/json")
 	_, err = client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(metric).
 		Post(url)
+
 	return err
 }
 

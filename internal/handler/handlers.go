@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi"
+	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
 )
@@ -63,10 +66,12 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r.Route("/", func(r chi.Router) {
 		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 		r.Route("/update", func(r chi.Router) {
+			r.Post("/", LoggerFuncServer(UpdateHandler(storage)))
 			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 		})
 		r.Route("/value", func(r chi.Router) {
 			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
+			r.Post("/", LoggerFuncServer(ValueHandler(storage)))
 		})
 	})
 	return r
@@ -132,12 +137,106 @@ func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
 			return
 		}
+
 		rw.WriteHeader(http.StatusOK)
 		_, err := rw.Write([]byte("OK"))
 		if err != nil {
-			log.Printf("write error: %v", err)
+			log.Printf("write status code error: %v", err)
 		}
 
+	}
+}
+
+func UpdateHandler(storage *repository.MemStorage) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(rw, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+			return
+		}
+
+		var metric models.Metrics
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "Failed to read request body", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		err = json.Unmarshal(body, &metric)
+		if err != nil {
+			http.Error(rw, "", http.StatusBadRequest)
+			return
+		}
+
+		switch metric.MType {
+		case "gauge":
+			storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+		case "counter":
+			storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+		default:
+			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			return
+		}
+
+		rw.WriteHeader(http.StatusOK)
+		_, err = rw.Write([]byte("OK"))
+		if err != nil {
+			log.Printf("write status code error: %v", err)
+		}
+	}
+}
+
+func ValueHandler(storage *repository.MemStorage) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		var metric models.Metrics
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "Failed to read request body", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		err = json.Unmarshal(body, &metric)
+		if err != nil {
+			http.Error(rw, "", http.StatusBadRequest)
+			return
+		}
+
+		switch metric.MType {
+		case "gauge":
+			val, err := storage.GetGauge(metric.ID)
+			if err != nil {
+				log.Printf("write error: %v", err)
+				rw.WriteHeader(http.StatusNotFound)
+				return
+			}
+			metric.Value = new(float64)
+			*metric.Value = float64(val)
+
+		case "counter":
+			val, err := storage.GetCounter(metric.ID)
+			if err != nil {
+				log.Printf("write error: %v", err)
+				rw.WriteHeader(http.StatusNotFound)
+				return
+			}
+			metric.Delta = new(int64)
+			*metric.Delta = int64(val)
+
+		default:
+			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			return
+		}
+
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+
+		err = json.NewEncoder(rw).Encode(metric)
+		if err != nil {
+			log.Printf("response encode error: %v", err)
+		}
 	}
 }
 
