@@ -6,12 +6,48 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/repository"
+	"go.uber.org/zap"
 )
 
+type ResponseData struct {
+	status int
+	size   int
+}
+
+type loggingRW struct {
+	http.ResponseWriter
+	responseData *ResponseData
+}
+
+func (r *loggingRW) Write(b []byte) (int, error) {
+	size, err := r.ResponseWriter.Write(b)
+	r.responseData.size += size
+	return size, err
+}
+
+func (r *loggingRW) WriteHeader(statusCode int) {
+	r.ResponseWriter.WriteHeader(statusCode)
+	r.responseData.status = statusCode
+}
+
+var sugar *zap.SugaredLogger
+
+func init() {
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logger.Sync()
+
+	sugar = logger.Sugar()
+}
+
 func Serve(store *repository.MemStorage, cfg string) error {
+
 	router := newRouter(store)
 	srv := &http.Server{
 		Addr:    cfg,
@@ -25,15 +61,44 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Route("/", func(r chi.Router) {
-		r.Get("/", GetListHandler(storage))
+		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 		r.Route("/update", func(r chi.Router) {
-			r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage))
+			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 		})
 		r.Route("/value", func(r chi.Router) {
-			r.Get("/{typeMetric}/{metric}", GetValueHandler(storage))
+			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
 		})
 	})
 	return r
+}
+
+func LoggerFuncServer(h http.Handler) http.HandlerFunc {
+	logFn := func(rw http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		responseData := &ResponseData{
+			size:   0,
+			status: 0,
+		}
+		lw := loggingRW{
+			ResponseWriter: rw,
+			responseData:   responseData,
+		}
+
+		h.ServeHTTP(&lw, r)
+
+		dur := time.Since(start)
+
+		sugar.Infoln(
+			"uri", r.RequestURI,
+			"method", r.Method,
+			"duration", dur,
+			"status", responseData.status,
+			"size", responseData.size,
+		)
+
+	}
+	return http.HandlerFunc(logFn)
 }
 
 func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
