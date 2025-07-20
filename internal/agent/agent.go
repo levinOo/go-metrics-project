@@ -22,11 +22,6 @@ type Config struct {
 }
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
-	url, err := url.JoinPath(endpoint, "update")
-	if err != nil {
-		return err
-	}
-
 	var metric models.Metrics
 	metric.ID = metricName
 	metric.MType = metricType
@@ -45,13 +40,18 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 		}
 		metric.Delta = &val
 	default:
-		return fmt.Errorf("unsupported metric type: %s", metricType)
+		return fmt.Errorf("unknown metric type: %s", metricType)
+	}
+
+	url, err := url.JoinPath(endpoint, "update")
+	if err != nil {
+		return err
 	}
 
 	client := resty.New()
 	client.SetHeader("Content-Type", "application/json")
+
 	_, err = client.R().
-		SetHeader("Content-Type", "application/json").
 		SetBody(metric).
 		Post(url)
 
