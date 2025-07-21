@@ -17,8 +17,8 @@ import (
 
 type Config struct {
 	Addr         string `env:"ADDRESS"`
-	PollInterval int    `env:"REPORT_INTERVAL"`
-	ReqInterval  int    `env:"POLL_INTERVAL"`
+	PollInterval int    `env:"POLL_INTERVAL"`
+	ReqInterval  int    `env:"REPORT_INTERVAL"`
 }
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
