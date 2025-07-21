@@ -3,6 +3,7 @@ package agent
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -27,7 +28,7 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 	}
 
 	client := resty.New()
-	client.SetHeader("Content-Type", "text/plain")
+	client.SetHeader("Content-Type", "application/json")
 	_, err = client.R().
 		Post(url)
 	return err
@@ -91,10 +92,9 @@ func StartAgent() <-chan error {
 				m.CollectMetrics()
 			case <-reqTicker.C:
 				if err := SendAllMetrics(&http.Client{}, endpoint, *m); err != nil {
-					errCh <- err
-					return
+					log.Printf("Sending metrics error: %v", err)
+					continue
 				}
-
 			}
 		}
 	}()

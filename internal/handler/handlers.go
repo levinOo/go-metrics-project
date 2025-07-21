@@ -50,8 +50,8 @@ func init() {
 }
 
 func Serve(store *repository.MemStorage, cfg string) error {
-
 	router := newRouter(store)
+
 	srv := &http.Server{
 		Addr:    cfg,
 		Handler: router,
@@ -66,12 +66,12 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r.Route("/", func(r chi.Router) {
 		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 		r.Route("/update", func(r chi.Router) {
-			r.Post("/", LoggerFuncServer(UpdateHandler(storage)))
+			r.Post("/", LoggerFuncServer(UpdateJSONHandler(storage)))
 			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 		})
 		r.Route("/value", func(r chi.Router) {
 			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-			r.Post("/", LoggerFuncServer(ValueHandler(storage)))
+			r.Post("/", LoggerFuncServer(GetJSONHandler(storage)))
 		})
 	})
 	return r
@@ -101,7 +101,6 @@ func LoggerFuncServer(h http.Handler) http.HandlerFunc {
 			"status", responseData.status,
 			"size", responseData.size,
 		)
-
 	}
 	return http.HandlerFunc(logFn)
 }
@@ -147,7 +146,7 @@ func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 	}
 }
 
-func UpdateHandler(storage *repository.MemStorage) http.HandlerFunc {
+func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			http.Error(rw, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
@@ -165,7 +164,7 @@ func UpdateHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 		err = json.Unmarshal(body, &metric)
 		if err != nil {
-			http.Error(rw, "", http.StatusBadRequest)
+			http.Error(rw, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -187,7 +186,7 @@ func UpdateHandler(storage *repository.MemStorage) http.HandlerFunc {
 	}
 }
 
-func ValueHandler(storage *repository.MemStorage) http.HandlerFunc {
+func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
