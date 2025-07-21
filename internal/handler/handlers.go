@@ -148,10 +148,6 @@ func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(rw, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
-			return
-		}
 
 		var metric models.Metrics
 
