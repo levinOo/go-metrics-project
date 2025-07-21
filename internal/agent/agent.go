@@ -13,7 +13,6 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/go-resty/resty/v2"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
-	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
 type Config struct {
@@ -23,38 +22,15 @@ type Config struct {
 }
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
-	url, err := url.JoinPath(endpoint, "update")
+	url, err := url.JoinPath(endpoint, "update", metricType, metricName, metricValue)
 	if err != nil {
 		return err
 	}
 
-	var metric models.Metrics
-	metric.ID = metricName
-	metric.MType = metricType
-
-	switch metric.MType {
-	case "gauge":
-		val, err := strconv.ParseFloat(metricValue, 64)
-		if err != nil {
-			return err
-		}
-		metric.Value = &val
-	case "counter":
-		val, err := strconv.ParseInt(metricValue, 10, 64)
-		if err != nil {
-			return err
-		}
-		metric.Delta = &val
-	default:
-		return fmt.Errorf("unsupported metric type: %s", metricType)
-	}
-
 	client := resty.New()
-	client.SetHeader("Content-Type", "application/json")
+	client.SetHeader("Content-Type", "text/plain")
 
-	_, err = client.R().
-		SetBody(metric).
-		Post(url)
+	_, err = client.R().Post(url)
 	return err
 }
 
@@ -119,6 +95,7 @@ func StartAgent() <-chan error {
 					log.Printf("Sending metrics error: %v", err)
 					continue
 				}
+
 			}
 		}
 	}()
