@@ -3,7 +3,6 @@ package agent
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -17,8 +16,8 @@ import (
 
 type Config struct {
 	Addr         string `env:"ADDRESS"`
-	PollInterval int    `env:"POLL_INTERVAL"`
-	ReqInterval  int    `env:"REPORT_INTERVAL"`
+	PollInterval int    `env:"REPORT_INTERVAL"`
+	ReqInterval  int    `env:"POLL_INTERVAL"`
 }
 
 func SendMetric(metricType, metricName, metricValue, endpoint string) error {
@@ -29,8 +28,8 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 
 	client := resty.New()
 	client.SetHeader("Content-Type", "text/plain")
-
-	_, err = client.R().Post(url)
+	_, err = client.R().
+		Post(url)
 	return err
 }
 
@@ -92,8 +91,8 @@ func StartAgent() <-chan error {
 				m.CollectMetrics()
 			case <-reqTicker.C:
 				if err := SendAllMetrics(&http.Client{}, endpoint, *m); err != nil {
-					log.Printf("Sending metrics error: %v", err)
-					continue
+					errCh <- err
+					return
 				}
 
 			}
