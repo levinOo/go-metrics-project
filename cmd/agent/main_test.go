@@ -58,7 +58,7 @@ func TestSendMetrics(t *testing.T) {
 				return
 			}
 		case "RandomValue":
-			if metricType != "counter" {
+			if metricType != "gauge" {
 				t.Errorf("Для RandomValue ожидается тип counter, получен %s", metricType)
 				return
 			}
