@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,12 +69,12 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r.Route("/", func(r chi.Router) {
 		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 		r.Route("/update", func(r chi.Router) {
-			r.Post("/", LoggerFuncServer(UpdateJSONHandler(storage)))
+			r.Post("/", LoggerFuncServer(EncodingMiddleware(UpdateJSONHandler(storage))))
 			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 		})
 		r.Route("/value", func(r chi.Router) {
 			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-			r.Post("/", LoggerFuncServer(GetJSONHandler(storage)))
+			r.Post("/", LoggerFuncServer(EncodingMiddleware(GetJSONHandler(storage))))
 		})
 	})
 	return r
@@ -103,6 +106,26 @@ func LoggerFuncServer(h http.Handler) http.HandlerFunc {
 		)
 	}
 	return http.HandlerFunc(logFn)
+}
+
+func EncodingMiddleware(h http.Handler) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Encoding") == "deflate" {
+			reader := flate.NewReader(r.Body)
+			defer reader.Close()
+
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				http.Error(rw, "failed to decompress body", http.StatusBadRequest)
+				return
+			}
+
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+		}
+
+		h.ServeHTTP(rw, r)
+	}
 }
 
 func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
@@ -148,12 +171,18 @@ func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-
 		var metric models.Metrics
 
-		body, err := io.ReadAll(r.Body)
+		gz, err := gzip.NewReader(r.Body)
 		if err != nil {
-			http.Error(rw, "Failed to read request body", http.StatusBadRequest)
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer gz.Close()
+
+		body, err := io.ReadAll(gz)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer r.Body.Close()
@@ -228,9 +257,32 @@ func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(http.StatusOK)
 
-		err = json.NewEncoder(rw).Encode(metric)
-		if err != nil {
-			log.Printf("response encode error: %v", err)
+		if r.Header.Get("Accept-Encoding") == "deflate" {
+			var buffer bytes.Buffer
+			writer, err := flate.NewWriter(&buffer, flate.BestCompression)
+			if err != nil {
+				http.Error(rw, "compression error", http.StatusInternalServerError)
+				return
+			}
+
+			err = json.NewEncoder(writer).Encode(metric)
+			if err != nil {
+				http.Error(rw, "encode error", http.StatusInternalServerError)
+				return
+			}
+
+			writer.Close()
+
+			rw.Header().Set("Content-Encoding", "deflate")
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusOK)
+			_, _ = rw.Write(buffer.Bytes())
+		} else {
+			rw.Header().Set("Content-Type", "application/json")
+			err := json.NewEncoder(rw).Encode(metric)
+			if err != nil {
+				log.Printf("response encode error: %v", err)
+			}
 		}
 	}
 }

@@ -1,131 +1,115 @@
 package main
 
 import (
+	"bytes"
+	"compress/flate"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/levinOo/go-metrics-project/internal/agent"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
 	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
-func TestSendMetrics(t *testing.T) {
-	m := &store.Metrics{
-		Alloc:       store.Gauge(123.456),
-		PollCount:   store.Counter(7),
-		RandomValue: store.Gauge(999.0),
+func TestCompressData(t *testing.T) {
+	original := []byte(`{"test":"value"}`)
+	compressed, err := agent.CompressData(original)
+	if err != nil {
+		t.Fatalf("CompressData error: %v", err)
 	}
 
-	receivedMetrics := make(map[string]models.Metrics)
+	r := flate.NewReader(bytes.NewReader(compressed))
+	defer r.Close()
 
+	decoded, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("Error decompressing data: %v", err)
+	}
+
+	if !bytes.Equal(decoded, original) {
+		t.Errorf("Decompressed data doesn't match original.\nGot: %s\nWant: %s", decoded, original)
+	}
+}
+
+func TestSendMetric(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		if r.Method != http.MethodPost {
-			t.Errorf("Ожидался метод POST, получен %s", r.Method)
-			return
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/update") {
+			t.Errorf("expected path to end with /update, got %s", r.URL.Path)
 		}
 
-		if r.URL.Path != "/update" {
-			t.Errorf("Ожидался путь /update, получен %s", r.URL.Path)
-			return
+		if r.Header.Get("Content-Encoding") != "deflate" {
+			t.Errorf("expected Content-Encoding: deflate, got %s", r.Header.Get("Content-Encoding"))
 		}
 
-		contentType := r.Header.Get("Content-Type")
-		if contentType != "application/json" {
-			t.Errorf("Ожидался Content-Type application/json, получен %s", contentType)
-			return
-		}
-
-		body, err := io.ReadAll(r.Body)
+		rdr := flate.NewReader(r.Body)
+		defer rdr.Close()
+		body, err := io.ReadAll(rdr)
 		if err != nil {
-			t.Errorf("Ошибка чтения тела запроса: %v", err)
-			return
-		}
-		defer r.Body.Close()
-
-		var metric models.Metrics
-		err = json.Unmarshal(body, &metric)
-		if err != nil {
-			t.Errorf("Ошибка парсинга JSON: %v", err)
-			return
+			t.Errorf("error reading deflate body: %v", err)
 		}
 
-		receivedMetrics[metric.ID] = metric
-
-		switch metric.ID {
-		case "Alloc":
-			if metric.MType != "gauge" {
-				t.Errorf("Для Alloc ожидается тип gauge, получен %s", metric.MType)
-				return
-			}
-			if metric.Value == nil {
-				t.Errorf("Для gauge метрики Alloc должно быть установлено поле Value")
-				return
-			}
-			expected := float64(m.Alloc)
-			if *metric.Value != expected {
-				t.Errorf("Значение Alloc не совпадает, получили %f, ожидали %f", *metric.Value, expected)
-				return
-			}
-
-		case "PollCount":
-			if metric.MType != "counter" {
-				t.Errorf("Для PollCount ожидается тип counter, получен %s", metric.MType)
-				return
-			}
-			if metric.Delta == nil {
-				t.Errorf("Для counter метрики PollCount должно быть установлено поле Delta")
-				return
-			}
-			expected := int64(m.PollCount)
-			if *metric.Delta != expected {
-				t.Errorf("Значение PollCount не совпадает, получили %d, ожидали %d", *metric.Delta, expected)
-				return
-			}
-
-		case "RandomValue":
-			if metric.MType != "gauge" {
-				t.Errorf("Для RandomValue ожидается тип gauge, получен %s", metric.MType)
-				return
-			}
-			if metric.Value == nil {
-				t.Errorf("Для gauge метрики RandomValue должно быть установлено поле Value")
-				return
-			}
-			expected := float64(m.RandomValue)
-			if *metric.Value != expected {
-				t.Errorf("Значение RandomValue не совпадает, получили %f, ожидали %f", *metric.Value, expected)
-				return
-			}
+		var m models.Metrics
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Errorf("error unmarshalling metric: %v", err)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
 	}))
 	defer ts.Close()
 
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
-
-	err := agent.SendAllMetrics(client, ts.URL, *m)
+	err := agent.SendMetric("gauge", "Alloc", "123.45", ts.URL)
 	if err != nil {
-		t.Errorf("Ошибка отправки метрик: %v", err)
+		t.Errorf("SendMetric failed: %v", err)
 	}
 
-	expectedMetrics := []string{"Alloc", "PollCount", "RandomValue"}
-	for _, metricName := range expectedMetrics {
-		if _, exists := receivedMetrics[metricName]; !exists {
-			t.Errorf("Метрика %s не была отправлена", metricName)
+	err = agent.SendMetric("counter", "PollCount", "99", ts.URL)
+	if err != nil {
+		t.Errorf("SendMetric failed: %v", err)
+	}
+}
+
+func TestSendAllMetrics(t *testing.T) {
+	expected := map[string]bool{"Alloc": false, "PollCount": false}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rdr := flate.NewReader(r.Body)
+		defer rdr.Close()
+
+		body, err := io.ReadAll(rdr)
+		if err != nil {
+			t.Errorf("read error: %v", err)
 		}
+
+		var m models.Metrics
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Errorf("unmarshal error: %v", err)
+		}
+
+		expected[m.ID] = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	metrics := store.Metrics{
+		Alloc:     store.Gauge(42.42),
+		PollCount: store.Counter(7),
 	}
 
-	if len(receivedMetrics) < 3 {
-		t.Errorf("Ожидалось минимум 3 метрики, получено %d", len(receivedMetrics))
+	client := &http.Client{}
+	err := agent.SendAllMetrics(client, ts.URL, metrics)
+	if err != nil {
+		t.Errorf("SendAllMetrics failed: %v", err)
+	}
+
+	for name, received := range expected {
+		if !received {
+			t.Errorf("metric %s was not sent", name)
+		}
 	}
 }

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"compress/flate"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -56,11 +58,18 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 		return err
 	}
 
+	buffer, err := CompressData(data)
+	if err != nil {
+		return err
+	}
+
 	client := resty.New()
 	resp, err := client.R().
-		SetHeader("Content-Type", "application/json"). // Заголовок для запроса
-		SetHeader("Accept", "application/json").       // Ожидаем JSON в ответе
-		SetBody(data).
+		SetHeader("Content-Type", "application/json").
+		SetHeader("Accept", "application/json").
+		SetHeader("Content-Encoding", "deflate").
+		SetHeader("Accept-Encoding", "gzip").
+		SetBody(buffer).
 		Post(url)
 
 	if err != nil {
@@ -110,6 +119,27 @@ func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error
 		}
 	}
 	return nil
+}
+
+func CompressData(data []byte) ([]byte, error) {
+	var buffer bytes.Buffer
+
+	w, err := flate.NewWriter(&buffer, flate.BestCompression)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = w.Write(data)
+	if err != nil {
+		return nil, err
+	}
+
+	err = w.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return buffer.Bytes(), nil
 }
 
 func StartAgent() <-chan error {
