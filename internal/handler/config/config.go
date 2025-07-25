@@ -15,30 +15,29 @@ type Config struct {
 }
 
 func GetConfig() (Config, error) {
-	// 1. Сначала парсим переменные окружения
 	cfg := Config{}
 	if err := env.Parse(&cfg); err != nil {
 		return cfg, err
 	}
 
-	addrFlag := flag.String("a", "localhost:8080", "address of HTTP server")
-	intervalFlag := flag.Int("i", 300, "time interval in seconds for saving data")
-	fileFlag := flag.String("f", "storage.txt", "path to storage file")
-	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
+	addr := flag.String("a", "", "address of HTTP server")
+	storeInterval := flag.Int("i", -1, "time interval in seconds for saving data")
+	fileStorage := flag.String("f", "", "path to storage file")
+	restore := flag.String("r", "", "restore metrics from file on startup")
 
 	flag.Parse()
 
-	if *addrFlag != "" {
-		cfg.Addr = *addrFlag
+	if *addr != "" {
+		cfg.Addr = *addr
 	}
-	if *intervalFlag >= 0 {
-		cfg.StoreInterval = *intervalFlag
+	if *storeInterval >= 0 {
+		cfg.StoreInterval = *storeInterval
 	}
-	if *fileFlag != "" {
-		cfg.FileStorage = *fileFlag
+	if *fileStorage != "" {
+		cfg.FileStorage = *fileStorage
 	}
-	if *restoreFlag != "" {
-		if val, err := strconv.ParseBool(*restoreFlag); err == nil {
+	if *restore != "" {
+		if val, err := strconv.ParseBool(*restore); err == nil {
 			cfg.Restore = val
 		}
 	}
