@@ -3,14 +3,17 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi"
@@ -55,32 +58,34 @@ func init() {
 
 func Serve(cfg config.Config) error {
 	store := repository.NewMemStorage()
-
 	router := newRouter(store)
 
+	// Восстановление из файла при запуске
 	if cfg.Restore {
 		file, err := os.ReadFile(cfg.FileStorage)
-		if err != nil {
+		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("error reading file: %v", err)
 		}
 
-		var metrics []models.Metrics
-		if err := json.Unmarshal(file, &metrics); err != nil {
-			return fmt.Errorf("error unmarshaling metrics: %v", err)
-		}
+		if len(file) > 0 {
+			var metrics []models.Metrics
+			if err := json.Unmarshal(file, &metrics); err != nil {
+				return fmt.Errorf("error unmarshaling metrics: %v", err)
+			}
 
-		for _, m := range metrics {
-			switch m.MType {
-			case "gauge":
-				if m.Value != nil {
-					store.SetGauge(m.ID, repository.Gauge(*m.Value))
+			for _, m := range metrics {
+				switch m.MType {
+				case "gauge":
+					if m.Value != nil {
+						store.SetGauge(m.ID, repository.Gauge(*m.Value))
+					}
+				case "counter":
+					if m.Delta != nil {
+						store.SetCounter(m.ID, repository.Counter(*m.Delta))
+					}
+				default:
+					log.Printf("unknown metric type: %s", m.MType)
 				}
-			case "counter":
-				if m.Delta != nil {
-					store.SetCounter(m.ID, repository.Counter(*m.Delta))
-				}
-			default:
-				log.Printf("unknown metric type: %s", m.MType)
 			}
 		}
 	}
@@ -90,16 +95,49 @@ func Serve(cfg config.Config) error {
 		Handler: router,
 	}
 
-	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
-		defer ticker.Stop()
+	serverErr := make(chan error, 1)
 
-		for range ticker.C {
-			saveToFile(store, "storage.txt")
-		}
+	go func() {
+		serverErr <- srv.ListenAndServe()
 	}()
 
-	return srv.ListenAndServe()
+	if cfg.StoreInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if err := saveToFile(store, cfg.FileStorage); err != nil {
+					log.Printf("error saving metrics: %v", err)
+				}
+			}
+		}()
+	}
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-quit:
+		sugar.Infoln("Shutting down server...")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			return fmt.Errorf("server shutdown error: %w", err)
+		}
+
+		if err := saveToFile(store, cfg.FileStorage); err != nil {
+			return fmt.Errorf("failed to save metrics on shutdown: %w", err)
+		}
+
+		sugar.Infoln("Metrics saved and server stopped gracefully")
+		return nil
+
+	case err := <-serverErr:
+		return fmt.Errorf("server error: %w", err)
+	}
 }
 
 func saveToFile(store *repository.MemStorage, fileName string) error {
