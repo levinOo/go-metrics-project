@@ -191,11 +191,25 @@ func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 			return
 		}
 
-		rw.WriteHeader(http.StatusOK)
-		rw.Header().Set("Content-Type", "application/json")
-		_, err = rw.Write([]byte("OK"))
-		if err != nil {
-			log.Printf("write status code error: %v", err)
+		accept := r.Header.Get("Accept")
+
+		if strings.Contains(accept, "application/json") {
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusOK)
+
+			response := map[string]string{"status": "ok"}
+			if err := json.NewEncoder(rw).Encode(response); err != nil {
+				log.Printf("json encode error: %v", err)
+			}
+
+		} else {
+			rw.Header().Set("Content-Type", "text/html")
+			rw.WriteHeader(http.StatusOK)
+
+			_, err = rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
+			if err != nil {
+				log.Printf("write html error: %v", err)
+			}
 		}
 	}
 }
