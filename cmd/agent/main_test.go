@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,7 +22,10 @@ func TestCompressData(t *testing.T) {
 		t.Fatalf("CompressData error: %v", err)
 	}
 
-	r := flate.NewReader(bytes.NewReader(compressed))
+	r, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatalf("gzip.NewReader error: %v", err)
+	}
 	defer r.Close()
 
 	decoded, err := io.ReadAll(r)
@@ -43,16 +46,20 @@ func TestSendMetric(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/update") {
 			t.Errorf("expected path to end with /update, got %s", r.URL.Path)
 		}
-
-		if r.Header.Get("Content-Encoding") != "deflate" {
-			t.Errorf("expected Content-Encoding: deflate, got %s", r.Header.Get("Content-Encoding"))
+		if r.Header.Get("Content-Encoding") != "gzip" {
+			t.Errorf("expected Content-Encoding: gzip, got %s", r.Header.Get("Content-Encoding"))
 		}
 
-		rdr := flate.NewReader(r.Body)
+		rdr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip.NewReader error: %v", err)
+			return
+		}
 		defer rdr.Close()
+
 		body, err := io.ReadAll(rdr)
 		if err != nil {
-			t.Errorf("error reading deflate body: %v", err)
+			t.Errorf("error reading gzip body: %v", err)
 		}
 
 		var m models.Metrics
@@ -77,8 +84,13 @@ func TestSendMetric(t *testing.T) {
 
 func TestSendAllMetrics(t *testing.T) {
 	expected := map[string]bool{"Alloc": false, "PollCount": false}
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rdr := flate.NewReader(r.Body)
+		rdr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip.NewReader error: %v", err)
+			return
+		}
 		defer rdr.Close()
 
 		body, err := io.ReadAll(rdr)
