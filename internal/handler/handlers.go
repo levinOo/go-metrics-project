@@ -60,7 +60,6 @@ func Serve(cfg config.Config) error {
 	store := repository.NewMemStorage()
 	router := newRouter(store)
 
-	// Восстановление из файла при запуске
 	if cfg.Restore {
 		file, err := os.ReadFile(cfg.FileStorage)
 		if err != nil && !os.IsNotExist(err) {
@@ -164,15 +163,11 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 
 	r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 
-	r.Route("/update", func(r chi.Router) {
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
-		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
-	})
+	r.Post("/update/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
+	r.Post("/update/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 
-	r.Route("/value", func(r chi.Router) {
-		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
-	})
+	r.Post("/value/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
+	r.Get("/value/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
 
 	return r
 }
