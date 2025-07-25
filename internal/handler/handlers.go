@@ -8,11 +8,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi"
+	"github.com/levinOo/go-metrics-project/internal/handler/config"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
@@ -51,13 +53,39 @@ func init() {
 	sugar = logger.Sugar()
 }
 
-func Serve(store *repository.MemStorage, cfg string) error {
+func Serve(store *repository.MemStorage, cfg config.Config) error {
 	router := newRouter(store)
 
 	srv := &http.Server{
-		Addr:    cfg,
+		Addr:    cfg.Addr,
 		Handler: router,
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			file, err := os.OpenFile(cfg.FileStorage, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+			if err != nil {
+				log.Printf("Error opening file for saving metrics: %v", err)
+				continue
+			}
+
+			data, err := json.MarshalIndent(store.GetAll(), "", "  ")
+			if err != nil {
+				log.Printf("Error encoding metrics to file: %v", err)
+				file.Close()
+				continue
+			}
+
+			if _, err := file.Write(data); err != nil {
+				log.Printf("Error writing data to file: %v", err)
+			}
+
+			file.Close()
+		}
+	}()
 
 	return srv.ListenAndServe()
 }
@@ -316,11 +344,9 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder
 
-		// Check Accept header to determine response format
 		accept := r.Header.Get("Accept")
 
 		if strings.Contains(accept, "text/html") {
-			// Build HTML response
 			sb.WriteString("<html><body>")
 			sb.WriteString("<h1>Metrics</h1>")
 
@@ -342,7 +368,6 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 			sb.WriteString("</body></html>")
 		} else {
-			// Build plain text response
 			for name, val := range storage.Gauges {
 				sb.WriteString(fmt.Sprintf("%s: %f\n", name, val))
 			}
@@ -351,7 +376,6 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 			}
 		}
 
-		// Check if client accepts gzip compression
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			rw.Header().Set("Content-Encoding", "gzip")
 			if strings.Contains(accept, "text/html") {
@@ -369,7 +393,6 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 				log.Printf("gzip write error: %v", err)
 			}
 		} else {
-			// No compression
 			if strings.Contains(accept, "text/html") {
 				rw.Header().Set("Content-Type", "text/html")
 			} else {
