@@ -23,7 +23,7 @@ func GetConfig() (Config, error) {
 	addr := flag.String("a", "", "address of HTTP server")
 	storeInterval := flag.Int("i", -1, "time interval in seconds for saving data")
 	fileStorage := flag.String("f", "", "path to storage file")
-	restore := flag.String("r", "", "restore metrics from file on startup")
+	restore := flag.String("r", "false", "restore metrics from file on startup")
 
 	flag.Parse()
 
