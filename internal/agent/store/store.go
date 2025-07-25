@@ -38,8 +38,9 @@ type Metrics struct {
 	StackSys      Gauge
 	Sys           Gauge
 	TotalAlloc    Gauge
-	PollCount     Counter
-	RandomValue   Counter
+
+	PollCount   Counter
+	RandomValue Gauge
 }
 
 func NewMetricsStorage() *Metrics {
@@ -78,5 +79,5 @@ func (m *Metrics) CollectMetrics() {
 	m.Sys = Gauge(stats.Sys)
 	m.TotalAlloc = Gauge(stats.TotalAlloc)
 	m.PollCount++
-	m.RandomValue = Counter(rand.Intn(1000))
+	m.RandomValue = Gauge(rand.Float64())
 }
