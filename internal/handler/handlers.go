@@ -3,17 +3,14 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/go-chi/chi"
@@ -56,40 +53,49 @@ func init() {
 	sugar = logger.Sugar()
 }
 
-func Serve(store *repository.MemStorage, cfg config.Config) error {
+func Serve(cfg config.Config) error {
+	store := repository.NewMemStorage()
+
 	router := newRouter(store)
+
+	if cfg.Restore {
+		file, err := os.ReadFile(cfg.FileStorage)
+		if err != nil {
+			return fmt.Errorf("error reading file: %v", err)
+		}
+
+		var metrics []models.Metrics
+		if err := json.Unmarshal(file, &metrics); err != nil {
+			return fmt.Errorf("error unmarshaling metrics: %v", err)
+		}
+
+		for _, m := range metrics {
+			switch m.MType {
+			case "gauge":
+				if m.Value != nil {
+					store.SetGauge(m.ID, repository.Gauge(*m.Value))
+				}
+			case "counter":
+				if m.Delta != nil {
+					store.SetCounter(m.ID, repository.Counter(*m.Delta))
+				}
+			default:
+				log.Printf("unknown metric type: %s", m.MType)
+			}
+		}
+	}
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
 		Handler: router,
 	}
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	if cfg.StoreInterval > 0 {
-		go func() {
-			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				if err := saveToFile(store, cfg.FileStorage); err != nil {
-					log.Printf("Ошибка при сохранении метрик: %v", err)
-				}
-			}
-		}()
-	}
-
 	go func() {
-		<-quit
-		log.Println("Получен сигнал завершения, сохраняем метрики...")
+		ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+		defer ticker.Stop()
 
-		if err := saveToFile(store, cfg.FileStorage); err != nil {
-			log.Printf("Ошибка при сохранении метрик на выходе: %v", err)
-		}
-
-		if err := srv.Shutdown(context.Background()); err != nil {
-			log.Printf("Ошибка завершения сервера: %v", err)
+		for range ticker.C {
+			saveToFile(store, "storage.txt")
 		}
 	}()
 
@@ -118,17 +124,18 @@ func saveToFile(store *repository.MemStorage, fileName string) error {
 func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Route("/", func(r chi.Router) {
-		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
-		r.Route("/update", func(r chi.Router) {
-			r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
-			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
-		})
-		r.Route("/value", func(r chi.Router) {
-			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-			r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
-		})
+	r.Get("/", LoggerFuncServer(GetListHandler(storage)))
+
+	r.Route("/update", func(r chi.Router) {
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
+		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 	})
+
+	r.Route("/value", func(r chi.Router) {
+		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
+	})
+
 	return r
 }
 
