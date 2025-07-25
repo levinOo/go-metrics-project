@@ -316,11 +316,11 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder
 
+		// Check Accept header to determine response format
 		accept := r.Header.Get("Accept")
 
 		if strings.Contains(accept, "text/html") {
-			rw.Header().Set("Content-Type", "text/html")
-
+			// Build HTML response
 			sb.WriteString("<html><body>")
 			sb.WriteString("<h1>Metrics</h1>")
 
@@ -342,8 +342,7 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 			sb.WriteString("</body></html>")
 		} else {
-			rw.Header().Set("Content-Type", "text/plain")
-
+			// Build plain text response
 			for name, val := range storage.Gauges {
 				sb.WriteString(fmt.Sprintf("%s: %f\n", name, val))
 			}
@@ -352,9 +351,35 @@ func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 			}
 		}
 
-		_, err := rw.Write([]byte(sb.String()))
-		if err != nil {
-			log.Printf("write error: %v", err)
+		// Check if client accepts gzip compression
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			rw.Header().Set("Content-Encoding", "gzip")
+			if strings.Contains(accept, "text/html") {
+				rw.Header().Set("Content-Type", "text/html")
+			} else {
+				rw.Header().Set("Content-Type", "text/plain")
+			}
+			rw.WriteHeader(http.StatusOK)
+
+			gz := gzip.NewWriter(rw)
+			defer gz.Close()
+
+			_, err := gz.Write([]byte(sb.String()))
+			if err != nil {
+				log.Printf("gzip write error: %v", err)
+			}
+		} else {
+			// No compression
+			if strings.Contains(accept, "text/html") {
+				rw.Header().Set("Content-Type", "text/html")
+			} else {
+				rw.Header().Set("Content-Type", "text/plain")
+			}
+
+			_, err := rw.Write([]byte(sb.String()))
+			if err != nil {
+				log.Printf("write error: %v", err)
+			}
 		}
 	}
 }
