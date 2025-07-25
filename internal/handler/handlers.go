@@ -314,20 +314,47 @@ func GetValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 func GetListHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-
 		var sb strings.Builder
 
-		for name, val := range storage.Gauges {
-			sb.WriteString(fmt.Sprintf("%s: %f\n", name, val))
-		}
-		for name, val := range storage.Counters {
-			sb.WriteString(fmt.Sprintf("%s: %d\n", name, val))
+		accept := r.Header.Get("Accept")
+
+		if strings.Contains(accept, "text/html") {
+			rw.Header().Set("Content-Type", "text/html")
+
+			sb.WriteString("<html><body>")
+			sb.WriteString("<h1>Metrics</h1>")
+
+			if len(storage.Gauges) > 0 {
+				sb.WriteString("<h2>Gauges</h2><ul>")
+				for name, val := range storage.Gauges {
+					sb.WriteString(fmt.Sprintf("<li>%s: %f</li>", name, val))
+				}
+				sb.WriteString("</ul>")
+			}
+
+			if len(storage.Counters) > 0 {
+				sb.WriteString("<h2>Counters</h2><ul>")
+				for name, val := range storage.Counters {
+					sb.WriteString(fmt.Sprintf("<li>%s: %d</li>", name, val))
+				}
+				sb.WriteString("</ul>")
+			}
+
+			sb.WriteString("</body></html>")
+		} else {
+			rw.Header().Set("Content-Type", "text/plain")
+
+			for name, val := range storage.Gauges {
+				sb.WriteString(fmt.Sprintf("%s: %f\n", name, val))
+			}
+			for name, val := range storage.Counters {
+				sb.WriteString(fmt.Sprintf("%s: %d\n", name, val))
+			}
 		}
 
 		_, err := rw.Write([]byte(sb.String()))
 		if err != nil {
 			log.Printf("write error: %v", err)
 		}
-
 	}
 }
