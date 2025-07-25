@@ -2,7 +2,7 @@ package agent
 
 import (
 	"bytes"
-	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -67,7 +67,7 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Accept", "application/json").
-		SetHeader("Content-Encoding", "deflate").
+		SetHeader("Content-Encoding", "gzip").
 		SetHeader("Accept-Encoding", "gzip").
 		SetBody(buffer).
 		Post(url)
@@ -78,11 +78,6 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 
 	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode(), resp.String())
-	}
-
-	contentType := resp.Header().Get("Content-Type")
-	if contentType != "" && contentType != "application/json" {
-		log.Printf("Warning: expected Content-Type application/json, got %s", contentType)
 	}
 
 	return nil
@@ -124,12 +119,9 @@ func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error
 func CompressData(data []byte) ([]byte, error) {
 	var buffer bytes.Buffer
 
-	w, err := flate.NewWriter(&buffer, flate.BestCompression)
-	if err != nil {
-		return nil, err
-	}
+	w := gzip.NewWriter(&buffer)
 
-	_, err = w.Write(data)
+	_, err := w.Write(data)
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"compress/flate"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -69,12 +68,12 @@ func newRouter(storage *repository.MemStorage) *chi.Mux {
 	r.Route("/", func(r chi.Router) {
 		r.Get("/", LoggerFuncServer(GetListHandler(storage)))
 		r.Route("/update", func(r chi.Router) {
-			r.Post("/", LoggerFuncServer(EncodingMiddleware(UpdateJSONHandler(storage))))
+			r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
 			r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
 		})
 		r.Route("/value", func(r chi.Router) {
 			r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-			r.Post("/", LoggerFuncServer(EncodingMiddleware(GetJSONHandler(storage))))
+			r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
 		})
 	})
 	return r
@@ -108,22 +107,25 @@ func LoggerFuncServer(h http.Handler) http.HandlerFunc {
 	return http.HandlerFunc(logFn)
 }
 
-func EncodingMiddleware(h http.Handler) http.HandlerFunc {
+func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Encoding") == "deflate" {
-			reader := flate.NewReader(r.Body)
-			defer reader.Close()
-
-			body, err := io.ReadAll(reader)
+		if r.Header.Get("Content-Encoding") == "gzip" {
+			gz, err := gzip.NewReader(r.Body)
 			if err != nil {
-				http.Error(rw, "failed to decompress body", http.StatusBadRequest)
+				http.Error(rw, "Failed to decompress gzip body", http.StatusBadRequest)
+				return
+			}
+			defer gz.Close()
+
+			body, err := io.ReadAll(gz)
+			if err != nil {
+				http.Error(rw, "Failed to read decompressed body", http.StatusInternalServerError)
 				return
 			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 		}
-
 		h.ServeHTTP(rw, r)
 	}
 }
@@ -173,21 +175,7 @@ func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		gz, err := gzip.NewReader(r.Body)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer gz.Close()
-
-		body, err := io.ReadAll(gz)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer r.Body.Close()
-
-		err = json.Unmarshal(body, &metric)
+		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
@@ -204,6 +192,7 @@ func UpdateJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 		}
 
 		rw.WriteHeader(http.StatusOK)
+		rw.Header().Set("Content-Type", "application/json")
 		_, err = rw.Write([]byte("OK"))
 		if err != nil {
 			log.Printf("write status code error: %v", err)
@@ -215,14 +204,7 @@ func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(rw, "Failed to read request body", http.StatusBadRequest)
-			return
-		}
-		defer r.Body.Close()
-
-		err = json.Unmarshal(body, &metric)
+		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "", http.StatusBadRequest)
 			return
@@ -254,34 +236,26 @@ func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 			return
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
-
-		if r.Header.Get("Accept-Encoding") == "deflate" {
-			var buffer bytes.Buffer
-			writer, err := flate.NewWriter(&buffer, flate.BestCompression)
-			if err != nil {
-				http.Error(rw, "compression error", http.StatusInternalServerError)
-				return
-			}
-
-			err = json.NewEncoder(writer).Encode(metric)
-			if err != nil {
-				http.Error(rw, "encode error", http.StatusInternalServerError)
-				return
-			}
-
-			writer.Close()
-
-			rw.Header().Set("Content-Encoding", "deflate")
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			rw.Header().Set("Content-Encoding", "gzip")
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusOK)
-			_, _ = rw.Write(buffer.Bytes())
+
+			gz := gzip.NewWriter(rw)
+			defer gz.Close()
+
+			err := json.NewEncoder(gz).Encode(metric)
+			if err != nil {
+				log.Printf("response gzip encode error: %v", err)
+			}
 		} else {
 			rw.Header().Set("Content-Type", "application/json")
-			err := json.NewEncoder(rw).Encode(metric)
+			rw.WriteHeader(http.StatusOK)
+
+			err = json.NewEncoder(rw).Encode(metric)
 			if err != nil {
 				log.Printf("response encode error: %v", err)
+
 			}
 		}
 	}
