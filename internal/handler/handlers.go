@@ -3,14 +3,17 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi"
@@ -61,33 +64,55 @@ func Serve(store *repository.MemStorage, cfg config.Config) error {
 		Handler: router,
 	}
 
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	if cfg.StoreInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if err := saveToFile(store, cfg.FileStorage); err != nil {
+					log.Printf("Ошибка при сохранении метрик: %v", err)
+				}
+			}
+		}()
+	}
+
 	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
-		defer ticker.Stop()
+		<-quit
+		log.Println("Получен сигнал завершения, сохраняем метрики...")
 
-		for range ticker.C {
-			file, err := os.OpenFile(cfg.FileStorage, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-			if err != nil {
-				log.Printf("Error opening file for saving metrics: %v", err)
-				continue
-			}
+		if err := saveToFile(store, cfg.FileStorage); err != nil {
+			log.Printf("Ошибка при сохранении метрик на выходе: %v", err)
+		}
 
-			data, err := json.MarshalIndent(store.GetAll(), "", "  ")
-			if err != nil {
-				log.Printf("Error encoding metrics to file: %v", err)
-				file.Close()
-				continue
-			}
-
-			if _, err := file.Write(data); err != nil {
-				log.Printf("Error writing data to file: %v", err)
-			}
-
-			file.Close()
+		if err := srv.Shutdown(context.Background()); err != nil {
+			log.Printf("Ошибка завершения сервера: %v", err)
 		}
 	}()
 
 	return srv.ListenAndServe()
+}
+
+func saveToFile(store *repository.MemStorage, fileName string) error {
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+
+	data, err := json.MarshalIndent(store.GetAll(), "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal metrics: %w", err)
+	}
+
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("write to file: %w", err)
+	}
+
+	return nil
 }
 
 func newRouter(storage *repository.MemStorage) *chi.Mux {
