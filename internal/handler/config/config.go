@@ -2,54 +2,70 @@ package config
 
 import (
 	"flag"
+	"os"
 	"strconv"
-
-	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
-	Addr          string `env:"ADDRESS"`
-	StoreInterval int    `env:"STORE_INTERVAL"`
-	FileStorage   string `env:"FILE_STORAGE_PATH"`
-	Restore       bool   `env:"RESTORE"`
+	Addr          string
+	StoreInterval int
+	FileStorage   string
+	Restore       bool
 }
 
 func GetConfig() (Config, error) {
-	cfg := Config{}
-	if err := env.Parse(&cfg); err != nil {
-		return cfg, err
-	}
+	defaultAddr := "localhost:8080"
+	defaultStoreInterval := 300
+	defaultFileStorage := "storage.json"
+	defaultRestore := true
 
-	addr := flag.String("a", "", "address of HTTP server")
-	storeInterval := flag.Int("i", 300, "time interval in seconds for saving data")
-	fileStorage := flag.String("f", "", "path to storage file")
-	restore := flag.String("r", "false", "restore metrics from file on startup")
+	addr := flag.String("a", defaultAddr, "address of HTTP server")
+	storeInterval := flag.Int("i", defaultStoreInterval, "time interval in seconds for saving data (0 = synchronous)")
+	fileStorage := flag.String("f", defaultFileStorage, "path to storage file")
+	restore := flag.String("r", strconv.FormatBool(defaultRestore), "restore metrics from file on startup (true/false)")
 
 	flag.Parse()
 
-	if *addr != "" {
+	cfg := Config{}
+
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		cfg.Addr = envAddr
+	} else {
 		cfg.Addr = *addr
 	}
-	if *storeInterval >= 0 {
+
+	if envInterval := os.Getenv("STORE_INTERVAL"); envInterval != "" {
+		if val, err := strconv.Atoi(envInterval); err == nil {
+			cfg.StoreInterval = val
+		} else {
+			cfg.StoreInterval = *storeInterval
+		}
+	} else {
 		cfg.StoreInterval = *storeInterval
 	}
-	if *fileStorage != "" {
+
+	if envFile := os.Getenv("FILE_STORAGE_PATH"); envFile != "" {
+		cfg.FileStorage = envFile
+	} else {
 		cfg.FileStorage = *fileStorage
 	}
-	if *restore != "" {
+
+	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
+		if val, err := strconv.ParseBool(envRestore); err == nil {
+			cfg.Restore = val
+		} else {
+			if val, err := strconv.ParseBool(*restore); err == nil {
+				cfg.Restore = val
+			} else {
+				cfg.Restore = defaultRestore
+			}
+		}
+	} else {
 		if val, err := strconv.ParseBool(*restore); err == nil {
 			cfg.Restore = val
+		} else {
+			cfg.Restore = defaultRestore
 		}
-	}
-
-	if cfg.Addr == "" {
-		cfg.Addr = "localhost:8080"
-	}
-	if cfg.StoreInterval == 0 {
-		cfg.StoreInterval = 300
-	}
-	if cfg.FileStorage == "" {
-		cfg.FileStorage = "storage.txt"
 	}
 
 	return cfg, nil
