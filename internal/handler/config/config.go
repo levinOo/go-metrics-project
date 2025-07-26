@@ -1,16 +1,72 @@
 package config
 
-import "flag"
+import (
+	"flag"
+	"os"
+	"strconv"
+)
 
 type Config struct {
-	cfg string
+	Addr          string
+	StoreInterval int
+	FileStorage   string
+	Restore       bool
 }
 
-func GetConfig() string {
-	cfg := Config{}
-	flag.StringVar(&cfg.cfg, "a", "localhost:8080", "addres of HTTP server")
+func GetConfig() (Config, error) {
+	defaultAddr := "localhost:8080"
+	defaultStoreInterval := 300
+	defaultFileStorage := "storage.json"
+	defaultRestore := true
+
+	addr := flag.String("a", defaultAddr, "address of HTTP server")
+	storeInterval := flag.Int("i", defaultStoreInterval, "time interval in seconds for saving data (0 = synchronous)")
+	fileStorage := flag.String("f", defaultFileStorage, "path to storage file")
+	restore := flag.String("r", strconv.FormatBool(defaultRestore), "restore metrics from file on startup (true/false)")
 
 	flag.Parse()
 
-	return cfg.cfg
+	cfg := Config{}
+
+	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+		cfg.Addr = envAddr
+	} else {
+		cfg.Addr = *addr
+	}
+
+	if envInterval := os.Getenv("STORE_INTERVAL"); envInterval != "" {
+		if val, err := strconv.Atoi(envInterval); err == nil {
+			cfg.StoreInterval = val
+		} else {
+			cfg.StoreInterval = *storeInterval
+		}
+	} else {
+		cfg.StoreInterval = *storeInterval
+	}
+
+	if envFile := os.Getenv("FILE_STORAGE_PATH"); envFile != "" {
+		cfg.FileStorage = envFile
+	} else {
+		cfg.FileStorage = *fileStorage
+	}
+
+	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
+		if val, err := strconv.ParseBool(envRestore); err == nil {
+			cfg.Restore = val
+		} else {
+			if val, err := strconv.ParseBool(*restore); err == nil {
+				cfg.Restore = val
+			} else {
+				cfg.Restore = defaultRestore
+			}
+		}
+	} else {
+		if val, err := strconv.ParseBool(*restore); err == nil {
+			cfg.Restore = val
+		} else {
+			cfg.Restore = defaultRestore
+		}
+	}
+
+	return cfg, nil
 }

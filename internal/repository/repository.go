@@ -3,6 +3,8 @@ package repository
 import (
 	"errors"
 	"sync"
+
+	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
 type (
@@ -54,4 +56,31 @@ func (m *MemStorage) GetCounter(name string) (val Counter, err error) {
 		err = errors.New("failed to get metric correctly")
 	}
 	return val, err
+}
+
+func (m *MemStorage) GetAll() []models.Metrics {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var list []models.Metrics
+
+	for name, val := range m.Counters {
+		v := int64(val)
+		list = append(list, models.Metrics{
+			ID:    name,
+			MType: "counter",
+			Delta: &v,
+		})
+	}
+
+	for name, val := range m.Gauges {
+		v := float64(val)
+		list = append(list, models.Metrics{
+			ID:    name,
+			MType: "gauge",
+			Value: &v,
+		})
+	}
+
+	return list
 }
