@@ -38,13 +38,89 @@ type Metrics struct {
 	StackSys      Gauge
 	Sys           Gauge
 	TotalAlloc    Gauge
+	RandomValue   Gauge
 
-	PollCount   Counter
-	RandomValue Gauge
+	PollCount Counter
 }
 
 func NewMetricsStorage() *Metrics {
 	return &Metrics{}
+}
+
+func (m *Metrics) ValuesGauge() []Gauge {
+	return []Gauge{
+		m.Alloc,
+		m.BuckHashSys,
+		m.Frees,
+		m.GCCPUFraction,
+		m.GCSys,
+		m.HeapAlloc,
+		m.HeapIdle,
+		m.HeapInuse,
+		m.HeapObjects,
+		m.HeapReleased,
+		m.HeapSys,
+		m.LastGC,
+		m.Lookups,
+		m.MCacheInuse,
+		m.MCacheSys,
+		m.MSpanInuse,
+		m.MSpanSys,
+		m.Mallocs,
+		m.NextGC,
+		m.NumForcedGC,
+		m.NumGC,
+		m.OtherSys,
+		m.PauseTotalNs,
+		m.StackInuse,
+		m.StackSys,
+		m.Sys,
+		m.TotalAlloc,
+		m.RandomValue,
+	}
+}
+
+func (m *Metrics) ValuesCounter() []Counter {
+	return []Counter{m.PollCount}
+}
+
+func (m *Metrics) GaugeNames() []string {
+	return []string{
+		"Alloc",
+		"BuckHashSys",
+		"Frees",
+		"GCCPUFraction",
+		"GCSys",
+		"HeapAlloc",
+		"HeapIdle",
+		"HeapInuse",
+		"HeapObjects",
+		"HeapReleased",
+		"HeapSys",
+		"LastGC",
+		"Lookups",
+		"MCacheInuse",
+		"MCacheSys",
+		"MSpanInuse",
+		"MSpanSys",
+		"Mallocs",
+		"NextGC",
+		"NumForcedGC",
+		"NumGC",
+		"OtherSys",
+		"PauseTotalNs",
+		"StackInuse",
+		"StackSys",
+		"Sys",
+		"TotalAlloc",
+		"RandomValue",
+	}
+}
+
+func (m *Metrics) CounterNames() []string {
+	return []string{
+		"PollCount",
+	}
 }
 
 func (m *Metrics) CollectMetrics() {

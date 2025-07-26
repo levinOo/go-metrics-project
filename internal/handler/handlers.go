@@ -18,45 +18,14 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/handler/config"
+	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
 )
 
-type ResponseData struct {
-	status int
-	size   int
-}
-
-type loggingRW struct {
-	http.ResponseWriter
-	responseData *ResponseData
-}
-
-func (r *loggingRW) Write(b []byte) (int, error) {
-	size, err := r.ResponseWriter.Write(b)
-	r.responseData.size += size
-	return size, err
-}
-
-func (r *loggingRW) WriteHeader(statusCode int) {
-	r.ResponseWriter.WriteHeader(statusCode)
-	r.responseData.status = statusCode
-}
-
-var sugar *zap.SugaredLogger
-
-func init() {
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer logger.Sync()
-
-	sugar = logger.Sugar()
-}
-
 func Serve(cfg config.Config) error {
+	sugar := logger.LoggerInit()
 	sugar.Infow("Starting server with config",
 		"address", cfg.Addr,
 		"storeInterval", cfg.StoreInterval,
@@ -66,12 +35,12 @@ func Serve(cfg config.Config) error {
 	store := repository.NewMemStorage()
 
 	if cfg.Restore {
-		if err := loadFromFile(store, cfg.FileStorage); err != nil {
+		if err := loadFromFile(store, cfg.FileStorage, sugar); err != nil {
 			return fmt.Errorf("failed to load metrics: %w", err)
 		}
 	}
 
-	router := newRouter(store)
+	router := newRouter(store, sugar)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -97,7 +66,7 @@ func Serve(cfg config.Config) error {
 				select {
 				case <-ticker.C:
 					sugar.Debugw("Periodic save triggered")
-					if err := saveToFile(store, cfg.FileStorage); err != nil {
+					if err := saveToFile(store, cfg.FileStorage, sugar); err != nil {
 						sugar.Errorw("Failed to save metrics", "error", err)
 					} else {
 						sugar.Debugw("Metrics saved successfully", "file", cfg.FileStorage)
@@ -131,7 +100,7 @@ func Serve(cfg config.Config) error {
 		}
 
 		sugar.Infow("Performing final save on shutdown", "file", cfg.FileStorage)
-		if err := saveToFile(store, cfg.FileStorage); err != nil {
+		if err := saveToFile(store, cfg.FileStorage, sugar); err != nil {
 			return fmt.Errorf("failed to save metrics on shutdown: %w", err)
 		}
 
@@ -143,7 +112,7 @@ func Serve(cfg config.Config) error {
 	}
 }
 
-func loadFromFile(store *repository.MemStorage, fileName string) error {
+func loadFromFile(store *repository.MemStorage, fileName string, sugar *zap.SugaredLogger) error {
 	if fileName == "" {
 		return nil
 	}
@@ -189,7 +158,7 @@ func loadFromFile(store *repository.MemStorage, fileName string) error {
 	return nil
 }
 
-func saveToFile(store *repository.MemStorage, fileName string) error {
+func saveToFile(store *repository.MemStorage, fileName string, sugar *zap.SugaredLogger) error {
 	if fileName == "" {
 		sugar.Debugw("Save skipped - no filename specified")
 		return nil
@@ -221,35 +190,35 @@ func saveToFile(store *repository.MemStorage, fileName string) error {
 	return nil
 }
 
-func newRouter(storage *repository.MemStorage) *chi.Mux {
+func newRouter(storage *repository.MemStorage, sugar *zap.SugaredLogger) *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Get("/", LoggerFuncServer(GetListHandler(storage)))
+	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage))))
-		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage)))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage)), sugar))
+		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage, sugar), sugar))
 	})
 
 	r.Route("/value", func(r chi.Router) {
-		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage)))
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage))))
+		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage), sugar))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage)), sugar))
 	})
 
 	return r
 }
 
-func LoggerFuncServer(h http.Handler) http.HandlerFunc {
+func LoggerFuncServer(h http.Handler, sugar *zap.SugaredLogger) http.HandlerFunc {
 	logFn := func(rw http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		responseData := &ResponseData{
-			size:   0,
-			status: 0,
+		responseData := &logger.ResponseData{
+			Size:   0,
+			Status: 0,
 		}
-		lw := loggingRW{
+		lw := logger.LoggingRW{
 			ResponseWriter: rw,
-			responseData:   responseData,
+			ResponseData:   responseData,
 		}
 
 		h.ServeHTTP(&lw, r)
@@ -260,8 +229,8 @@ func LoggerFuncServer(h http.Handler) http.HandlerFunc {
 			"uri", r.RequestURI,
 			"method", r.Method,
 			"duration", dur,
-			"status", responseData.status,
-			"size", responseData.size,
+			"status", responseData.Status,
+			"size", responseData.Size,
 		)
 	}
 	return http.HandlerFunc(logFn)
@@ -290,7 +259,7 @@ func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 	}
 }
 
-func UpdateValueHandler(storage *repository.MemStorage) http.HandlerFunc {
+func UpdateValueHandler(storage *repository.MemStorage, sugar *zap.SugaredLogger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 
 		nameMetric := chi.URLParam(r, "metric")

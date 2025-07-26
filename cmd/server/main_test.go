@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/handler"
+	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/repository"
 )
 
@@ -117,12 +118,13 @@ func TestServer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			storage := repository.NewMemStorage()
+			sugar := logger.LoggerInit()
 			r := chi.NewRouter()
 
 			switch tt.method {
 
 			case http.MethodPost:
-				r.Post("/value/{typeMetric}/{metric}/{value}", handler.UpdateValueHandler(storage))
+				r.Post("/value/{typeMetric}/{metric}/{value}", handler.UpdateValueHandler(storage, sugar))
 				req := httptest.NewRequest(tt.method, tt.url, nil)
 				rec := httptest.NewRecorder()
 

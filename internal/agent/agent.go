@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strconv"
 	"time"
 
@@ -86,33 +85,28 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 
 func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error {
 
-	v := reflect.ValueOf(m)
-	t := v.Type()
+	gauges := m.ValuesGauge()
+	gaugesName := m.GaugeNames()
 
-	for i := 0; i < v.NumField(); i++ {
-		field := t.Field(i)
-		value := v.Field(i)
-
-		var metricType string
-		var metricValue string
-
-		switch value.Kind() {
-		case reflect.Float64:
-			metricType = "gauge"
-			metricValue = strconv.FormatFloat(value.Float(), 'f', -1, 64)
-		case reflect.Int64:
-			metricType = "counter"
-			metricValue = strconv.FormatInt(value.Int(), 10)
-		default:
-			continue
-		}
-
-		metricName := field.Name
-		err := SendMetric(metricType, metricName, metricValue, endpoint)
+	for i, val := range gauges {
+		metricValue := strconv.FormatFloat(float64(val), 'f', -1, 64)
+		err := SendMetric("gauge", gaugesName[i], metricValue, endpoint)
 		if err != nil {
 			return err
 		}
 	}
+
+	counters := m.ValuesCounter()
+	countersName := m.CounterNames()
+
+	for i, val := range counters {
+		metricValue := strconv.FormatInt(int64(val), 10)
+		err := SendMetric("counter", countersName[i], metricValue, endpoint)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
