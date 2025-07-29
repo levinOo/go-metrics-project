@@ -17,99 +17,174 @@ import (
 	"time"
 
 	"github.com/go-chi/chi"
-	"github.com/levinOo/go-metrics-project/internal/handler/config"
+	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
 )
 
+type ServerComponents struct {
+	server *http.Server
+	store  *repository.MemStorage
+	logger *zap.SugaredLogger
+}
+
+type PeriodicSaver struct {
+	store    *repository.MemStorage
+	interval time.Duration
+	filePath string
+	logger   *zap.SugaredLogger
+	stopCh   chan struct{}
+	done     chan struct{}
+}
+
+func NewPeriodicSaver(store *repository.MemStorage, filePath string, interval time.Duration, logger *zap.SugaredLogger) *PeriodicSaver {
+	return &PeriodicSaver{
+		store:    store,
+		interval: interval,
+		filePath: filePath,
+		logger:   logger,
+		stopCh:   make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+}
+
+func (ps *PeriodicSaver) Start() {
+	go func() {
+		defer close(ps.done)
+		ticker := time.NewTicker(ps.interval)
+		defer ticker.Stop()
+
+		ps.logger.Infow("Starting periodic save", "interval", ps.interval, "file", ps.filePath)
+
+		for {
+			select {
+			case <-ticker.C:
+				ps.logger.Debugw("Periodic save triggered")
+				if err := saveToFile(ps.store, ps.filePath, ps.logger); err != nil {
+					ps.logger.Errorw("Failed to save metrics", "error", err)
+				} else {
+					ps.logger.Debugw("Metrics saved successfully", "file", ps.filePath)
+				}
+			case <-ps.stopCh:
+				ps.logger.Debugw("Stopping periodic save")
+				return
+			}
+		}
+	}()
+}
+
+func (ps *PeriodicSaver) Stop() {
+	if ps.stopCh != nil {
+		close(ps.stopCh)
+		<-ps.done
+	}
+}
+
 func Serve(cfg config.Config) error {
-	sugar := logger.LoggerInit()
+	sugar := logger.NewLogger()
+	server := setupServer(cfg, sugar)
+	saver := setupPeriodicSaver(cfg, server.store, sugar)
+
+	return runServerWithGracefulShutdown(server, saver, cfg)
+}
+
+func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents {
 	sugar.Infow("Starting server with config",
 		"address", cfg.Addr,
 		"storeInterval", cfg.StoreInterval,
 		"fileStorage", cfg.FileStorage,
-		"restore", cfg.Restore)
+		"restore", cfg.Restore,
+	)
 
-	store := repository.NewMemStorage()
+	storage := repository.NewMemStorage()
 
 	if cfg.Restore {
-		if err := loadFromFile(store, cfg.FileStorage, sugar); err != nil {
-			return fmt.Errorf("failed to load metrics: %w", err)
+		if err := loadFromFile(storage, cfg.FileStorage, sugar); err != nil {
+			sugar.Errorw("Failed to load metrics from file", "error", err)
 		}
 	}
 
-	router := newRouter(store, sugar)
+	router := newRouter(storage, sugar)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
 		Handler: router,
 	}
 
+	return &ServerComponents{
+		server: srv,
+		store:  storage,
+		logger: sugar,
+	}
+}
+
+func setupPeriodicSaver(cfg config.Config, storage *repository.MemStorage, sugar *zap.SugaredLogger) *PeriodicSaver {
+	if cfg.StoreInterval <= 0 {
+		sugar.Infow("Periodic save disabled", "storeInterval", cfg.StoreInterval)
+		return nil
+	}
+
+	saver := NewPeriodicSaver(storage, cfg.FileStorage, time.Duration(cfg.StoreInterval)*time.Second, sugar)
+	saver.Start()
+
+	return saver
+}
+
+func runServerWithGracefulShutdown(components *ServerComponents, saver *PeriodicSaver, cfg config.Config) error {
+	server := components.server
+	storage := components.store
+	sugar := components.logger
+
 	serverErr := make(chan error, 1)
 
 	go func() {
-		sugar.Infow("Starting server", "address", cfg.Addr)
-		serverErr <- srv.ListenAndServe()
+		sugar.Infow("HTTP server started", "address", cfg.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+		close(serverErr)
 	}()
-
-	var saveStop chan struct{}
-	if cfg.StoreInterval > 0 {
-		sugar.Infow("Starting periodic save", "interval", cfg.StoreInterval, "file", cfg.FileStorage)
-		saveStop = make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(time.Duration(cfg.StoreInterval) * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					sugar.Debugw("Periodic save triggered")
-					if err := saveToFile(store, cfg.FileStorage, sugar); err != nil {
-						sugar.Errorw("Failed to save metrics", "error", err)
-					} else {
-						sugar.Debugw("Metrics saved successfully", "file", cfg.FileStorage)
-					}
-				case <-saveStop:
-					sugar.Debugw("Stopping periodic save")
-					return
-				}
-			}
-		}()
-	} else {
-		sugar.Infow("Periodic save disabled", "storeInterval", cfg.StoreInterval)
-	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	select {
+	case err := <-serverErr:
+		if err != nil {
+			sugar.Errorw("Server error", "error", err)
+			if saver != nil {
+				saver.Stop()
+			}
+			return fmt.Errorf("server error: %w", err)
+		}
 	case <-quit:
 		sugar.Infoln("Shutting down server...")
-
-		if saveStop != nil {
-			close(saveStop)
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := srv.Shutdown(ctx); err != nil {
-			sugar.Errorw("Server shutdown error", "error", err)
-		}
-
-		sugar.Infow("Performing final save on shutdown", "file", cfg.FileStorage)
-		if err := saveToFile(store, cfg.FileStorage, sugar); err != nil {
-			return fmt.Errorf("failed to save metrics on shutdown: %w", err)
-		}
-
-		sugar.Infoln("Metrics saved and server stopped gracefully")
-		return nil
-
-	case err := <-serverErr:
-		return fmt.Errorf("server error: %w", err)
 	}
+
+	return gracefulShutdown(cfg, sugar, storage, server, saver)
+}
+
+func gracefulShutdown(cfg config.Config, sugar *zap.SugaredLogger, store *repository.MemStorage, srv *http.Server, saver *PeriodicSaver) error {
+	if saver != nil {
+		saver.Stop()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		sugar.Errorw("Server shutdown error", "error", err)
+	}
+
+	sugar.Infow("Performing final save on shutdown", "file", cfg.FileStorage)
+	if err := saveToFile(store, cfg.FileStorage, sugar); err != nil {
+		return fmt.Errorf("failed to save metrics on shutdown: %w", err)
+	}
+
+	sugar.Infoln("Metrics saved and server stopped gracefully")
+	return nil
 }
 
 func loadFromFile(store *repository.MemStorage, fileName string, sugar *zap.SugaredLogger) error {
@@ -117,13 +192,9 @@ func loadFromFile(store *repository.MemStorage, fileName string, sugar *zap.Suga
 		return nil
 	}
 
-	data, err := os.ReadFile(fileName)
+	data, err := readFile(fileName, sugar)
 	if err != nil {
-		if os.IsNotExist(err) {
-			sugar.Infow("Metrics file does not exist, starting with empty storage", "file", fileName)
-			return nil
-		}
-		return fmt.Errorf("failed to read metrics file %s: %w", fileName, err)
+		return err
 	}
 
 	if len(data) == 0 {
@@ -131,9 +202,9 @@ func loadFromFile(store *repository.MemStorage, fileName string, sugar *zap.Suga
 		return nil
 	}
 
-	var metrics []models.Metrics
-	if err := json.Unmarshal(data, &metrics); err != nil {
-		return fmt.Errorf("failed to unmarshal metrics from %s: %w", fileName, err)
+	metrics, err := deserializeMetrics(data, fileName)
+	if err != nil {
+		return err
 	}
 
 	count := 0
@@ -158,6 +229,26 @@ func loadFromFile(store *repository.MemStorage, fileName string, sugar *zap.Suga
 	return nil
 }
 
+func readFile(fileName string, sugar *zap.SugaredLogger) ([]byte, error) {
+	data, err := os.ReadFile(fileName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			sugar.Infow("Metrics file does not exist, starting with empty storage", "file", fileName)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read metrics file %s: %w", fileName, err)
+	}
+	return data, nil
+}
+
+func deserializeMetrics(data []byte, fileName string) ([]models.Metrics, error) {
+	var metrics []models.Metrics
+	if err := json.Unmarshal(data, &metrics); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metrics from %s: %w", fileName, err)
+	}
+	return metrics, nil
+}
+
 func saveToFile(store *repository.MemStorage, fileName string, sugar *zap.SugaredLogger) error {
 	if fileName == "" {
 		sugar.Debugw("Save skipped - no filename specified")
@@ -166,27 +257,38 @@ func saveToFile(store *repository.MemStorage, fileName string, sugar *zap.Sugare
 
 	sugar.Debugw("Starting save to file", "file", fileName)
 
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", fileName, err)
-	}
-	defer file.Close()
-
 	allMetrics := store.GetAll()
 	sugar.Debugw("Retrieved metrics from storage", "count", len(allMetrics))
 
-	data, err := json.MarshalIndent(allMetrics, "", "  ")
+	data, err := serializeMetrics(allMetrics)
 	if err != nil {
-		return fmt.Errorf("failed to marshal metrics: %w", err)
+		return fmt.Errorf("failed to serialize metrics: %w", err)
 	}
 
-	sugar.Debugw("Marshaled metrics", "size", len(data))
+	if err := writeFile(fileName, data); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", fileName, err)
+	}
+
+	sugar.Debugw("Successfully saved metrics", "file", fileName, "size", len(data))
+	return nil
+}
+
+func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
+	return json.MarshalIndent(metrics, "", "  ")
+}
+
+// writeFile writes data to file
+func writeFile(fileName string, data []byte) error {
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
 
 	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("failed to write to file: %w", err)
+		return fmt.Errorf("failed to write data: %w", err)
 	}
 
-	sugar.Debugw("Successfully wrote to file", "file", fileName, "size", len(data))
 	return nil
 }
 
@@ -261,7 +363,6 @@ func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 
 func UpdateValueHandler(storage *repository.MemStorage, sugar *zap.SugaredLogger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-
 		nameMetric := chi.URLParam(r, "metric")
 		valueMetric := chi.URLParam(r, "value")
 		typeMetric := chi.URLParam(r, "typeMetric")
@@ -399,7 +500,6 @@ func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 			err = json.NewEncoder(rw).Encode(metric)
 			if err != nil {
 				log.Printf("response encode error: %v", err)
-
 			}
 		}
 	}
@@ -407,7 +507,6 @@ func GetJSONHandler(storage *repository.MemStorage) http.HandlerFunc {
 
 func GetValueHandler(storage *repository.MemStorage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-
 		nameMetric := chi.URLParam(r, "metric")
 
 		switch chi.URLParam(r, "typeMetric") {

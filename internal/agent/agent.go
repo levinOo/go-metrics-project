@@ -30,21 +30,21 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 		return err
 	}
 
-	stor := models.Metrics{
+	metric := models.Metrics{
 		ID:    metricName,
 		MType: metricType,
 	}
 
-	switch stor.MType {
+	switch metric.MType {
 	case "gauge":
-		stor.Value = new(float64)
-		*stor.Value, err = strconv.ParseFloat(metricValue, 64)
+		metric.Value = new(float64)
+		*metric.Value, err = strconv.ParseFloat(metricValue, 64)
 		if err != nil {
 			return err
 		}
 	case "counter":
-		stor.Delta = new(int64)
-		*stor.Delta, err = strconv.ParseInt(metricValue, 10, 64)
+		metric.Delta = new(int64)
+		*metric.Delta, err = strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
 			return err
 		}
@@ -52,7 +52,7 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 		return fmt.Errorf("unknown metric type: %s", metricType)
 	}
 
-	data, err := json.Marshal(stor)
+	data, err := json.Marshal(metric)
 	if err != nil {
 		return err
 	}
@@ -84,24 +84,11 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 }
 
 func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error {
+	metrics := m.ValuesAllTyped()
 
-	gauges := m.ValuesGauge()
-	gaugesName := m.GaugeNames()
-
-	for i, val := range gauges {
-		metricValue := strconv.FormatFloat(float64(val), 'f', -1, 64)
-		err := SendMetric("gauge", gaugesName[i], metricValue, endpoint)
-		if err != nil {
-			return err
-		}
-	}
-
-	counters := m.ValuesCounter()
-	countersName := m.CounterNames()
-
-	for i, val := range counters {
-		metricValue := strconv.FormatInt(int64(val), 10)
-		err := SendMetric("counter", countersName[i], metricValue, endpoint)
+	for name, metric := range metrics {
+		valueStr := metric.String()
+		err := SendMetric(metric.Type(), name, valueStr, endpoint)
 		if err != nil {
 			return err
 		}

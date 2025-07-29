@@ -118,7 +118,7 @@ func TestServer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			storage := repository.NewMemStorage()
-			sugar := logger.LoggerInit()
+			sugar := logger.NewLogger()
 			r := chi.NewRouter()
 
 			switch tt.method {

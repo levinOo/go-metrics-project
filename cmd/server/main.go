@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/handler"
-	"github.com/levinOo/go-metrics-project/internal/handler/config"
 )
 
 func main() {

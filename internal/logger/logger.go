@@ -28,7 +28,7 @@ func (r *LoggingRW) WriteHeader(statusCode int) {
 	r.ResponseData.Status = statusCode
 }
 
-func LoggerInit() *zap.SugaredLogger {
+func NewLogger() *zap.SugaredLogger {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
 		log.Fatal(err)
