@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"os"
 	"strconv"
 )
 
@@ -21,10 +22,10 @@ func GetConfig() (Config, error) {
 	flag.Parse()
 
 	cfg := Config{
-		Addr:          getString("ADDRESS", *addrFlag),
-		FileStorage:   getString("FILE_STORAGE_PATH", *fileFlag),
-		StoreInterval: getInt("STORE_INTERVAL", *storeIntFlag),
-		Restore:       getBool("RESTORE", *restoreFlag),
+		Addr:          getString(os.Getenv("ADDRESS"), *addrFlag),
+		FileStorage:   getString(os.Getenv("FILE_STORAGE_PATH"), *fileFlag),
+		StoreInterval: getInt(os.Getenv("STORE_INTERVAL"), *storeIntFlag),
+		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag),
 	}
 
 	return cfg, nil
