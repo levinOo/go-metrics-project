@@ -16,7 +16,7 @@ func GetConfig() (Config, error) {
 	addrFlag := flag.String("a", "localhost:8080", "HTTP server address")
 	storeIntFlag := flag.String("i", "300", "store interval in seconds")
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
-	restoreFlag := flag.String("r", "true", "restore metrics from file on startup (true/false)")
+	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
 
 	flag.Parse()
 
