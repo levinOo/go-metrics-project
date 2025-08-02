@@ -3,6 +3,7 @@ package store
 import (
 	"math/rand"
 	"runtime"
+	"strconv"
 )
 
 type (
@@ -38,12 +39,84 @@ type Metrics struct {
 	StackSys      Gauge
 	Sys           Gauge
 	TotalAlloc    Gauge
-	PollCount     Counter
-	RandomValue   Counter
+	RandomValue   Gauge
+
+	PollCount Counter
 }
 
 func NewMetricsStorage() *Metrics {
 	return &Metrics{}
+}
+
+type Metric interface {
+	String() string
+	Type() string
+}
+
+func (g Gauge) String() string {
+	return strconv.FormatFloat(float64(g), 'f', -1, 64)
+}
+
+func (g Gauge) Type() string {
+	return "gauge"
+}
+
+func (c Counter) String() string {
+	return strconv.FormatInt(int64(c), 10)
+}
+
+func (c Counter) Type() string {
+	return "counter"
+}
+
+func (m *Metrics) ValuesAllTyped() map[string]Metric {
+	result := make(map[string]Metric)
+	for name, val := range m.ValuesGauge() {
+		result[name] = val
+	}
+	for name, val := range m.ValuesCounter() {
+		result[name] = val
+	}
+	return result
+}
+
+func (m *Metrics) ValuesGauge() map[string]Metric {
+	return map[string]Metric{
+		"Alloc":         m.Alloc,
+		"BuckHashSys":   m.BuckHashSys,
+		"Frees":         m.Frees,
+		"GCCPUFraction": m.GCCPUFraction,
+		"GCSys":         m.GCSys,
+		"HeapAlloc":     m.HeapAlloc,
+		"HeapIdle":      m.HeapIdle,
+		"HeapInuse":     m.HeapInuse,
+		"HeapObjects":   m.HeapObjects,
+		"HeapReleased":  m.HeapReleased,
+		"HeapSys":       m.HeapSys,
+		"LastGC":        m.LastGC,
+		"Lookups":       m.Lookups,
+		"MCacheInuse":   m.MCacheInuse,
+		"MCacheSys":     m.MCacheSys,
+		"MSpanInuse":    m.MSpanInuse,
+		"MSpanSys":      m.MSpanSys,
+		"Mallocs":       m.Mallocs,
+		"NextGC":        m.NextGC,
+		"NumForcedGC":   m.NumForcedGC,
+		"NumGC":         m.NumGC,
+		"OtherSys":      m.OtherSys,
+		"PauseTotalNs":  m.PauseTotalNs,
+		"StackInuse":    m.StackInuse,
+		"StackSys":      m.StackSys,
+		"Sys":           m.Sys,
+		"TotalAlloc":    m.TotalAlloc,
+		"RandomValue":   m.RandomValue,
+	}
+}
+
+func (m *Metrics) ValuesCounter() map[string]Metric {
+	return map[string]Metric{
+		"PollCount": m.PollCount,
+	}
 }
 
 func (m *Metrics) CollectMetrics() {
@@ -78,5 +151,5 @@ func (m *Metrics) CollectMetrics() {
 	m.Sys = Gauge(stats.Sys)
 	m.TotalAlloc = Gauge(stats.TotalAlloc)
 	m.PollCount++
-	m.RandomValue = Counter(rand.Intn(1000))
+	m.RandomValue = Gauge(rand.Float64())
 }

@@ -1,11 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
+	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/handler"
-	"github.com/levinOo/go-metrics-project/internal/handler/config"
-	"github.com/levinOo/go-metrics-project/internal/repository"
 )
 
 func main() {
@@ -15,10 +15,11 @@ func main() {
 }
 
 func run() error {
-	cfg := config.GetConfig()
+	cfg, err := config.GetConfig()
+	if err != nil {
+		return fmt.Errorf("ошибка парсинга ENV: %w", err)
+	}
 
-	store := repository.NewMemStorage()
-
-	return handler.Serve(store, cfg)
+	return handler.Serve(cfg)
 
 }
