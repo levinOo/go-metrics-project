@@ -11,6 +11,7 @@ type Config struct {
 	StoreInterval int    `env:"STORE_INTERVAL"`
 	FileStorage   string `env:"FILE_STORAGE_PATH"`
 	Restore       bool   `env:"RESTORE"`
+	AddrDB        string `env:"DATABASE_DSN"`
 }
 
 func GetConfig() (Config, error) {
@@ -18,6 +19,7 @@ func GetConfig() (Config, error) {
 	storeIntFlag := flag.String("i", "300", "store interval in seconds")
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
+	addrDBFlag := flag.String("d", "host=localhost port=5432 user=mihailtur password=yourpassword dbname=postgres sslmode=disable", "Database addres")
 
 	flag.Parse()
 
@@ -26,6 +28,7 @@ func GetConfig() (Config, error) {
 		FileStorage:   getString(os.Getenv("FILE_STORAGE_PATH"), *fileFlag),
 		StoreInterval: getInt(os.Getenv("STORE_INTERVAL"), *storeIntFlag),
 		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag),
+		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag),
 	}
 
 	return cfg, nil

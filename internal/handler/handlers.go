@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/config"
+	"github.com/levinOo/go-metrics-project/internal/config/db"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
@@ -106,7 +107,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 	}
 
-	router := newRouter(storage, sugar)
+	router := newRouter(storage, sugar, cfg.AddrDB)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -277,7 +278,6 @@ func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
 	return json.MarshalIndent(metrics, "", "  ")
 }
 
-// writeFile writes data to file
 func writeFile(fileName string, data []byte) error {
 	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -292,10 +292,11 @@ func writeFile(fileName string, data []byte) error {
 	return nil
 }
 
-func newRouter(storage *repository.MemStorage, sugar *zap.SugaredLogger) *chi.Mux {
+func newRouter(storage *repository.MemStorage, sugar *zap.SugaredLogger, cfgAddrDB string) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
+	r.Get("/ping", LoggerFuncServer(PingHandler(cfgAddrDB), sugar))
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage)), sugar))
@@ -358,6 +359,23 @@ func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 			r.ContentLength = int64(len(body))
 		}
 		h.ServeHTTP(rw, r)
+	}
+}
+
+func PingHandler(cfgAddrDB string) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		err := db.DataBaseConnection(ctx, cfgAddrDB)
+		if err != nil {
+			http.Error(rw, "No conection with Database", http.StatusInternalServerError)
+			return
+		}
+
+		rw.WriteHeader(http.StatusOK)
+		rw.Write([]byte("Database is reachable"))
 	}
 }
 
