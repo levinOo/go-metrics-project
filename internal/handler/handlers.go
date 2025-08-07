@@ -107,7 +107,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 	}
 
-	router := newRouter(storage, sugar, cfg.AddrDb)
+	router := newRouter(storage, sugar, cfg.AddrDB)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -292,11 +292,11 @@ func writeFile(fileName string, data []byte) error {
 	return nil
 }
 
-func newRouter(storage *repository.MemStorage, sugar *zap.SugaredLogger, cfgAddrDb string) *chi.Mux {
+func newRouter(storage *repository.MemStorage, sugar *zap.SugaredLogger, cfgAddrDB string) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
-	r.Get("/ping", LoggerFuncServer(PingHandler(cfgAddrDb), sugar))
+	r.Get("/ping", LoggerFuncServer(PingHandler(cfgAddrDB), sugar))
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage)), sugar))
@@ -362,13 +362,13 @@ func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 	}
 }
 
-func PingHandler(cfgAddrDb string) http.HandlerFunc {
+func PingHandler(cfgAddrDB string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		err := db.DataBaseConnection(ctx, cfgAddrDb)
+		err := db.DataBaseConnection(ctx, cfgAddrDB)
 		if err != nil {
 			http.Error(rw, "No conection with Database", http.StatusInternalServerError)
 			return
