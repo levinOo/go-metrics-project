@@ -7,8 +7,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func DataBaseConnection(ctx context.Context, cfgAddrDb string) error {
-	db, err := sql.Open("pgx", cfgAddrDb)
+func DataBaseConnection(ctx context.Context, cfgAddrDB string) error {
+	db, err := sql.Open("pgx", cfgAddrDB)
 	if err != nil {
 		return err
 	}
