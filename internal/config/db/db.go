@@ -1,23 +1,32 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func DataBaseConnection(ctx context.Context, cfgAddrDB string) error {
+func DataBaseConnection(cfgAddrDB string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", cfgAddrDB)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer db.Close()
 
-	err = db.PingContext(ctx)
+	return db, nil
+}
+
+func CreateTableDB(db *sql.DB) error {
+	query := `
+	CREATE TABLE IF NOT EXISTS metrics (
+		name TEXT PRIMARY KEY,
+		type TEXT,
+		value DOUBLE PRECISION,
+		delta BIGINT
+	);`
+
+	_, err := db.Exec(query)
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
