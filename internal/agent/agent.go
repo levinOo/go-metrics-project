@@ -55,6 +55,11 @@ func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) 
 		metricsList = append(metricsList, metricModel)
 	}
 
+	if len(metricsList) == 0 {
+		log.Println("No metrics to send, skipping batch")
+		return nil
+	}
+
 	return sendMetricsBatch(metricsList, endpoint)
 }
 

@@ -120,29 +120,48 @@ func UpdatesValuesHandler(storage repository.Storage) http.HandlerFunc {
 		defer r.Body.Close()
 
 		for _, metric := range metrics {
-
 			switch metric.MType {
 			case "gauge":
-				err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
-				if err != nil {
-					log.Printf("Failed to set gauge %s: %v", metric.ID, err)
-					continue
+				if metric.Value != nil {
+					err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+					if err != nil {
+						http.Error(rw, "Internal server error", http.StatusInternalServerError)
+						return
+					}
 				}
 			case "counter":
-				err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
-				if err != nil {
-					log.Printf("Failed to set counter %s: %v", metric.ID, err)
-					continue
+				if metric.Delta != nil {
+					err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+					if err != nil {
+						http.Error(rw, "Internal server error", http.StatusInternalServerError)
+						return
+					}
 				}
 			default:
-				http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
-				return
+				log.Printf("Unknown metric type: %s for metric %s", metric.MType, metric.ID)
 			}
-
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
+		accept := r.Header.Get("Accept")
+
+		if strings.Contains(accept, "application/json") {
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusOK)
+
+			response := map[string]string{"status": "ok"}
+			if err := json.NewEncoder(rw).Encode(response); err != nil {
+				log.Printf("json encode error: %v", err)
+			}
+
+		} else {
+			rw.Header().Set("Content-Type", "text/html")
+			rw.WriteHeader(http.StatusOK)
+
+			_, err = rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
+			if err != nil {
+				log.Printf("write html error: %v", err)
+			}
+		}
 	}
 }
 
