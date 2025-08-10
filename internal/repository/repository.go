@@ -88,6 +88,10 @@ func (d *DBStorage) GetAll() ([]models.Metrics, error) {
 			return nil, err
 		}
 
+		if rows.Err() != nil {
+			return nil, err
+		}
+
 		metric := models.Metrics{
 			ID:    name,
 			MType: mtype,

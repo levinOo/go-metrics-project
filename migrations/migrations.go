@@ -1,30 +1,24 @@
 package migrations
 
 import (
-	"database/sql"
 	"fmt"
 
 	"github.com/golang-migrate/migrate"
-	"github.com/golang-migrate/migrate/database/postgres"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 )
 
-func RunMigrations(db *sql.DB, migrationsPath string) error {
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
-	if err != nil {
-		return fmt.Errorf("could not create migration driver: %w", err)
-	}
-
-	m, err := migrate.NewWithDatabaseInstance(
+func RunMigrations(dbConnString, migrationsPath string) error {
+	m, err := migrate.New(
 		"file://"+migrationsPath,
-		"postgres", driver,
+		"postgres://"+dbConnString,
 	)
 	if err != nil {
 		return fmt.Errorf("could not create migrate instance: %w", err)
 	}
+	defer m.Close()
 
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {
