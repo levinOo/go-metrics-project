@@ -34,11 +34,27 @@ func NewDBStorage(db *sql.DB) *DBStorage {
 }
 
 func (d *DBStorage) SetGauge(name string, value Gauge) error {
-	_, err := d.db.Exec(`
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
 		INSERT INTO metrics (name, value, type) VALUES ($1, $2, $3)
 		ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value
-	`, name, float64(value), "gauge")
-	return err
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(name, float64(value), "gauge")
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (d *DBStorage) GetGauge(name string) (Gauge, error) {
@@ -51,11 +67,27 @@ func (d *DBStorage) GetGauge(name string) (Gauge, error) {
 }
 
 func (d *DBStorage) SetCounter(name string, value Counter) error {
-	_, err := d.db.Exec(`
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
 		INSERT INTO metrics (name, delta, type) VALUES ($1, $2, $3)
 		ON CONFLICT (name) DO UPDATE SET delta = metrics.delta + EXCLUDED.delta
-	`, name, int64(value), "counter")
-	return err
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(name, int64(value), "counter")
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (d *DBStorage) GetCounter(name string) (Counter, error) {

@@ -17,7 +17,6 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
-	"github.com/levinOo/go-metrics-project/migrations"
 	"go.uber.org/zap"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -63,9 +62,9 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 			return nil
 		}
 
-		if err := migrations.RunMigrations(cfg.AddrDB, "./migrations"); err != nil {
-			sugar.Fatalw("Failed to run migrations", "error", err)
-		}
+		// if err := migrations.RunMigrations(cfg.AddrDB, "./migrations"); err != nil {
+		// 	sugar.Fatalw("Failed to run migrations", "error", err)
+		// }
 
 		err = db.CreateTableDB(dbConn)
 		if err != nil {

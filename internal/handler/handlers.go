@@ -26,6 +26,8 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfgAddrDB s
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
 	r.Get("/ping", LoggerFuncServer(PingHandler(storage), sugar))
 
+	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage)), sugar))
+
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage)), sugar))
 		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage, sugar), sugar))
@@ -106,6 +108,44 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	}
 }
 
+func UpdatesValuesHandler(storage repository.Storage) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		var metrics []models.Metrics
+
+		err := json.NewDecoder(r.Body).Decode(&metrics)
+		if err != nil {
+			http.Error(rw, "Invalid JSON format", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		for _, metric := range metrics {
+
+			switch metric.MType {
+			case "gauge":
+				err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+				if err != nil {
+					log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+					continue
+				}
+			case "counter":
+				err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+				if err != nil {
+					log.Printf("Failed to set counter %s: %v", metric.ID, err)
+					continue
+				}
+			default:
+				http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+				return
+			}
+
+		}
+
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+	}
+}
+
 func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		nameMetric := chi.URLParam(r, "metric")
@@ -159,9 +199,15 @@ func UpdateJSONHandler(storage repository.Storage) http.HandlerFunc {
 
 		switch metric.MType {
 		case "gauge":
-			storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+			err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+			if err != nil {
+				log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+			}
 		case "counter":
-			storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+			err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+			if err != nil {
+				log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+			}
 		default:
 			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
 			return
