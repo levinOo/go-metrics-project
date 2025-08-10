@@ -26,7 +26,7 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfgAddrDB s
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
 	r.Get("/ping", LoggerFuncServer(PingHandler(storage), sugar))
 
-	r.Post("/updates/", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage)), sugar))
+	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage)), sugar))
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage)), sugar))
