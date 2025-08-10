@@ -19,6 +19,10 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"github.com/levinOo/go-metrics-project/migrations"
 	"go.uber.org/zap"
+
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 )
 
 type ServerComponents struct {
@@ -59,8 +63,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 
 		if err := migrations.RunMigrations(dbConn, "/Users/mihailtur/go-metrics-project/migrations"); err != nil {
-			sugar.Errorw("Failed to run migrations", "error", err)
-			return nil
+			sugar.Fatalw("Failed to run migrations", "error", err)
 		}
 
 		err = db.CreateTableDB(dbConn)
