@@ -38,14 +38,17 @@ func TestCompressData(t *testing.T) {
 	}
 }
 
-func TestSendMetric(t *testing.T) {
+func TestSendAllMetricsBatch(t *testing.T) {
+	expectedMetrics := map[string]bool{"Alloc": false, "PollCount": false}
+	requestCount := 0
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+		requestCount++
+
+		if !strings.HasSuffix(r.URL.Path, "/updates") {
+			t.Errorf("expected path to end with /updates, got %s", r.URL.Path)
 		}
-		if !strings.HasSuffix(r.URL.Path, "/update") {
-			t.Errorf("expected path to end with /update, got %s", r.URL.Path)
-		}
+
 		if r.Header.Get("Content-Encoding") != "gzip" {
 			t.Errorf("expected Content-Encoding: gzip, got %s", r.Header.Get("Content-Encoding"))
 		}
@@ -59,51 +62,20 @@ func TestSendMetric(t *testing.T) {
 
 		body, err := io.ReadAll(rdr)
 		if err != nil {
-			t.Errorf("error reading gzip body: %v", err)
-		}
-
-		var m models.Metrics
-		if err := json.Unmarshal(body, &m); err != nil {
-			t.Errorf("error unmarshalling metric: %v", err)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ts.Close()
-
-	err := agent.SendMetric("gauge", "Alloc", "123.45", ts.URL)
-	if err != nil {
-		t.Errorf("SendMetric failed: %v", err)
-	}
-
-	err = agent.SendMetric("counter", "PollCount", "99", ts.URL)
-	if err != nil {
-		t.Errorf("SendMetric failed: %v", err)
-	}
-}
-
-func TestSendAllMetrics(t *testing.T) {
-	expected := map[string]bool{"Alloc": false, "PollCount": false}
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rdr, err := gzip.NewReader(r.Body)
-		if err != nil {
-			t.Errorf("gzip.NewReader error: %v", err)
-			return
-		}
-		defer rdr.Close()
-
-		body, err := io.ReadAll(rdr)
-		if err != nil {
 			t.Errorf("read error: %v", err)
 		}
 
-		var m models.Metrics
-		if err := json.Unmarshal(body, &m); err != nil {
+		var metrics []models.Metrics
+		if err := json.Unmarshal(body, &metrics); err != nil {
 			t.Errorf("unmarshal error: %v", err)
 		}
 
-		expected[m.ID] = true
+		for _, metric := range metrics {
+			if _, exists := expectedMetrics[metric.ID]; exists {
+				expectedMetrics[metric.ID] = true
+			}
+		}
+
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -114,12 +86,16 @@ func TestSendAllMetrics(t *testing.T) {
 	}
 
 	client := &http.Client{}
-	err := agent.SendAllMetrics(client, ts.URL, metrics)
+	err := agent.SendAllMetricsBatch(client, ts.URL, metrics)
 	if err != nil {
-		t.Errorf("SendAllMetrics failed: %v", err)
+		t.Errorf("SendAllMetricsBatch failed: %v", err)
 	}
 
-	for name, received := range expected {
+	if requestCount != 1 {
+		t.Errorf("expected 1 request, got %d", requestCount)
+	}
+
+	for name, received := range expectedMetrics {
 		if !received {
 			t.Errorf("metric %s was not sent", name)
 		}

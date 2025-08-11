@@ -186,11 +186,13 @@ func isPostgreSQLConnectionError(err error) bool {
 		return false
 	}
 
+	// Проверяем PostgreSQL Class 08 errors
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code[:2] == "08"
 	}
 
+	// Проверяем обычные connection errors
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}

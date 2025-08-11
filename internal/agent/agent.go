@@ -26,42 +26,63 @@ type Config struct {
 	ReqInterval  int    `env:"REPORT_INTERVAL"`
 }
 
-func SendMetric(metricType, metricName, metricValue, endpoint string) error {
-	url, err := url.JoinPath(endpoint, "update")
-	if err != nil {
-		return err
-	}
+func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) error {
+	metrics := m.ValuesAllTyped()
+	var metricsList []models.Metrics
 
-	metric := models.Metrics{
-		ID:    metricName,
-		MType: metricType,
-	}
-
-	switch metric.MType {
-	case "gauge":
-		metric.Value = new(float64)
-		*metric.Value, err = strconv.ParseFloat(metricValue, 64)
-		if err != nil {
-			return err
+	for name, metric := range metrics {
+		metricModel := models.Metrics{
+			ID:    name,
+			MType: metric.Type(),
 		}
-	case "counter":
-		metric.Delta = new(int64)
-		*metric.Delta, err = strconv.ParseInt(metricValue, 10, 64)
-		if err != nil {
-			return err
+
+		var err error
+		switch metric.Type() {
+		case "gauge":
+			metricModel.Value = new(float64)
+			*metricModel.Value, err = strconv.ParseFloat(metric.String(), 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse gauge value for %s: %w", name, err)
+			}
+		case "counter":
+			metricModel.Delta = new(int64)
+			*metricModel.Delta, err = strconv.ParseInt(metric.String(), 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse counter value for %s: %w", name, err)
+			}
+		default:
+			return fmt.Errorf("unknown metric type: %s for metric %s", metric.Type(), name)
 		}
-	default:
-		return fmt.Errorf("unknown metric type: %s", metricType)
+
+		metricsList = append(metricsList, metricModel)
 	}
 
-	data, err := json.Marshal(metric)
+	if len(metricsList) == 0 {
+		log.Println("No metrics to send, skipping batch")
+		return nil
+	}
+
+	return sendMetricsBatch(metricsList, endpoint)
+}
+
+func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	url, err := url.JoinPath(endpoint, "updates")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to join URL path: %w", err)
+	}
+
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metrics: %w", err)
 	}
 
 	buffer, err := CompressData(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to compress data: %w", err)
 	}
 
 	client := resty.New()
@@ -74,26 +95,11 @@ func SendMetric(metricType, metricName, metricValue, endpoint string) error {
 		Post(url)
 
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return fmt.Errorf("failed to send batch request: %w", err)
 	}
 
 	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode(), resp.String())
-	}
-
-	return nil
-
-}
-
-func SendAllMetrics(client *http.Client, endpoint string, m store.Metrics) error {
-	metrics := m.ValuesAllTyped()
-
-	for name, metric := range metrics {
-		valueStr := metric.String()
-		err := SendMetric(metric.Type(), name, valueStr, endpoint)
-		if err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -146,7 +152,7 @@ func StartAgent() <-chan error {
 
 			case <-reqTicker.C:
 				var connRefusedErr = syscall.ECONNREFUSED
-				err := SendAllMetrics(&http.Client{}, endpoint, *m)
+				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m)
 
 				if errors.Is(err, connRefusedErr) {
 					intervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
@@ -155,7 +161,7 @@ func StartAgent() <-chan error {
 						log.Printf("Retry attempt %d after error: %v", i+1, err)
 						time.Sleep(intervals[i])
 
-						err = SendAllMetrics(&http.Client{}, endpoint, *m)
+						err = SendAllMetricsBatch(&http.Client{}, endpoint, *m)
 						if err == nil {
 							log.Printf("Success after %d retries", i+1)
 							break
