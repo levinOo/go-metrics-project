@@ -63,9 +63,9 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 			return nil
 		}
 
-		if err := migrations.RunMigrations(cfg.AddrDB, "./migrations"); err != nil {
-			sugar.Fatalw("Failed to run migrations", "error", err)
-		}
+		// if err := migrations.RunMigrations(cfg.AddrDB, "./migrations"); err != nil {
+		// 	sugar.Fatalw("Failed to run migrations", "error", err)
+		// }
 
 		err = db.CreateTableDB(dbConn)
 		if err != nil {
