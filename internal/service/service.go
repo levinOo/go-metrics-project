@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/config/db"
 	"github.com/levinOo/go-metrics-project/internal/handler"
@@ -56,10 +59,34 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 	var dbConn *sql.DB
 
 	if cfg.AddrDB != "" {
-		dbConn, err := db.DataBaseConnection(cfg.AddrDB)
+		var dbConn *sql.DB
+		intervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+		var err error
+		dbConn, err = db.DataBaseConnection(cfg.AddrDB)
+
+		if isPostgreSQLConnectionError(err) {
+			for i := 0; i < 3; i++ {
+				sugar.Infow("Database connection retry", "attempt", i+1, "error", err)
+				time.Sleep(intervals[i])
+
+				dbConn, err = db.DataBaseConnection(cfg.AddrDB)
+				if err == nil {
+					sugar.Infow("Database connected after retries", "attempts", i+1)
+					break
+				}
+
+				if !isPostgreSQLConnectionError(err) {
+					break
+				}
+			}
+		}
+
 		if err != nil {
-			dbConn.Close()
-			sugar.Errorw("Failed to connect to the database", "error", err)
+			if dbConn != nil {
+				dbConn.Close()
+			}
+			sugar.Errorw("Failed to connect to the database after retries", "error", err)
 			return nil
 		}
 
@@ -153,6 +180,26 @@ func (ps *PeriodicSaver) Stop() {
 		close(ps.stopCh)
 		<-ps.done
 	}
+}
+
+func isPostgreSQLConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code[:2] == "08"
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "dial tcp") ||
+		strings.Contains(errStr, "connect:")
 }
 
 func runServerWithGracefulShutdown(components *ServerComponents, saver *PeriodicSaver, cfg config.Config) error {

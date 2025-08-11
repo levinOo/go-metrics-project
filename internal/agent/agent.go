@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -141,12 +143,33 @@ func StartAgent() <-chan error {
 			select {
 			case <-pollTicker.C:
 				m.CollectMetrics()
+
 			case <-reqTicker.C:
-				if err := SendAllMetrics(&http.Client{}, endpoint, *m); err != nil {
-					log.Printf("Sending metrics error: %v", err)
-					continue
+				var connRefusedErr = syscall.ECONNREFUSED
+				err := SendAllMetrics(&http.Client{}, endpoint, *m)
+
+				if errors.Is(err, connRefusedErr) {
+					intervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+					for i := 0; i < 3; i++ {
+						log.Printf("Retry attempt %d after error: %v", i+1, err)
+						time.Sleep(intervals[i])
+
+						err = SendAllMetrics(&http.Client{}, endpoint, *m)
+						if err == nil {
+							log.Printf("Success after %d retries", i+1)
+							break
+						}
+
+						if !errors.Is(err, connRefusedErr) {
+							break
+						}
+					}
 				}
 
+				if err != nil {
+					log.Printf("Final sending metrics error: %v", err)
+				}
 			}
 		}
 	}()
