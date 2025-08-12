@@ -22,6 +22,7 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
 
+	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -89,9 +90,9 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 			return nil
 		}
 
-		// if err := migrations.RunMigrations(cfg.AddrDB, "./migrations"); err != nil {
-		// 	sugar.Fatalw("Failed to run migrations", "error", err)
-		// }
+		if err := RunMigrations(cfg.AddrDB); err != nil {
+			sugar.Fatalw("Failed to run migrations", "error", err)
+		}
 
 		err = db.CreateTableDB(dbConn)
 		if err != nil {
@@ -370,4 +371,23 @@ func deserializeMetrics(data []byte, fileName string) ([]models.Metrics, error) 
 
 func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
 	return json.MarshalIndent(metrics, "", "  ")
+}
+
+func RunMigrations(dbConnString string) error {
+	migrationsPath := "/Users/mihailtur/go-metrics-project/migrations"
+	m, err := migrate.New(
+		"file://"+migrationsPath,
+		dbConnString,
+	)
+	if err != nil {
+		return fmt.Errorf("could not create migrate instance: %w", err)
+	}
+	defer m.Close()
+
+	err = m.Up()
+	if err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
+	return nil
 }
