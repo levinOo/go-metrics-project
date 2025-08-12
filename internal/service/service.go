@@ -187,13 +187,11 @@ func isPostgreSQLConnectionError(err error) bool {
 		return false
 	}
 
-	// Проверяем PostgreSQL Class 08 errors
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code[:2] == "08"
 	}
 
-	// Проверяем обычные connection errors
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
@@ -374,15 +372,14 @@ func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
 }
 
 func RunMigrations(dbConnString string) error {
-	migrationsPath := "/Users/mihailtur/go-metrics-project/migrations"
+	migrationsPath := "file://migrations"
 	m, err := migrate.New(
-		"file://"+migrationsPath,
+		migrationsPath,
 		dbConnString,
 	)
 	if err != nil {
 		return fmt.Errorf("could not create migrate instance: %w", err)
 	}
-	defer m.Close()
 
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {
