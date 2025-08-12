@@ -1,7 +1,6 @@
-CREATE TABLE IF NOT EXISTS metrics 
-(
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  value TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS metrics (
+    name TEXT PRIMARY KEY,
+    type TEXT,
+    value DOUBLE PRECISION,
+    delta BIGINT
 );
