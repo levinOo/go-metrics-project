@@ -70,7 +70,7 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 	return Counter(val), err
 }
 
-func (s *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
+func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	valueStrings := make([]string, 0, len(metrics))
 	valueArgs := make([]interface{}, 0, len(metrics)*4)
 
@@ -100,7 +100,7 @@ func (s *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
             delta = EXCLUDED.delta
     `, strings.Join(valueStrings, ","))
 
-	_, err := s.db.Exec(query, valueArgs...)
+	_, err := d.db.Exec(query, valueArgs...)
 	return err
 }
 
