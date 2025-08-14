@@ -76,17 +76,23 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	valueArgs := make([]interface{}, 0, len(metrics)*4)
 
 	for i, m := range metrics {
+
 		argStart := i*4 + 1
 		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", argStart, argStart+1, argStart+2, argStart+3))
 
 		var val interface{}
 		var delta interface{}
 
-		if m.MType == "gauge" {
+		switch m.MType {
+		case "gauge":
 			val = *m.Value
-		}
-		if m.MType == "counter" {
+			delta = nil
+		case "counter":
+			val = nil
 			delta = *m.Delta
+		default:
+			log.Printf("Skipping metric %s: unknown type %s", m.ID, m.MType)
+			continue
 		}
 
 		valueArgs = append(valueArgs, m.ID, m.MType, val, delta)
@@ -97,11 +103,23 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
         VALUES %s
         ON CONFLICT (name) DO UPDATE
         SET type = EXCLUDED.type,
-            value = EXCLUDED.value,
-            delta = EXCLUDED.delta
+            value = CASE 
+                WHEN EXCLUDED.type = 'gauge' THEN EXCLUDED.value 
+                ELSE metrics.value 
+            END,
+            delta = CASE 
+                WHEN EXCLUDED.type = 'counter' THEN metrics.delta + EXCLUDED.delta 
+                ELSE EXCLUDED.delta 
+            END
     `, strings.Join(valueStrings, ","))
 
 	_, err := d.db.Exec(query, valueArgs...)
+	if err != nil {
+		log.Printf("Database error in InsertMetricsBatch: %v", err)
+		log.Printf("Query: %s", query)
+		log.Printf("Args: %v", valueArgs)
+	}
+
 	return err
 }
 
