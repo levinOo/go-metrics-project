@@ -72,25 +72,66 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 }
 
 func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	valueStrings := make([]string, 0, len(metrics))
-	valueArgs := make([]interface{}, 0, len(metrics)*4)
-	argIndex := 1
+	if len(metrics) == 0 {
+		return nil
+	}
 
+	// Группировка метрик по ID
+	type batchItem struct {
+		MType string
+		Value *float64
+		Delta *int64
+	}
+
+	tmp := make(map[string]batchItem)
 	for _, metric := range metrics {
-		var val interface{} = nil
-		var delta interface{} = nil
-
-		switch metric.MType {
-		case "gauge":
-			val = *metric.Value
-		case "counter":
-			delta = *metric.Delta
-		default:
+		if metric.ID == "" || metric.MType == "" {
 			continue
 		}
 
+		b := tmp[metric.ID]
+
+		switch metric.MType {
+		case "gauge":
+			if metric.Value != nil {
+				b.MType = "gauge"
+				b.Value = metric.Value
+			}
+		case "counter":
+			if metric.Delta != nil {
+				b.MType = "counter"
+				if b.Delta == nil {
+					b.Delta = new(int64)
+				}
+				*b.Delta += *metric.Delta
+			}
+		}
+
+		tmp[metric.ID] = b
+	}
+
+	if len(tmp) == 0 {
+		return nil
+	}
+
+	// Подготовка SQL
+	valueStrings := make([]string, 0, len(tmp))
+	valueArgs := make([]interface{}, 0, len(tmp)*4)
+	argIndex := 1
+
+	for id, b := range tmp {
+		var val interface{} = nil
+		var delta interface{} = nil
+
+		switch b.MType {
+		case "gauge":
+			val = *b.Value
+		case "counter":
+			delta = *b.Delta
+		}
+
 		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", argIndex, argIndex+1, argIndex+2, argIndex+3))
-		valueArgs = append(valueArgs, metric.ID, delta, metric.MType, val)
+		valueArgs = append(valueArgs, id, delta, b.MType, val)
 		argIndex += 4
 	}
 
