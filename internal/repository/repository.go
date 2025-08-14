@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/levinOo/go-metrics-project/internal/models"
@@ -21,6 +23,7 @@ type Storage interface {
 	GetCounter(name string) (Counter, error)
 	GetAll() ([]models.Metrics, error)
 	Ping(ctx context.Context) error
+	InsertMetricsBatch([]models.Metrics) error
 }
 
 // --------------------- DBStorage ---------------------
@@ -65,6 +68,40 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 		return 0, errors.New("metric not found")
 	}
 	return Counter(val), err
+}
+
+func (s *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
+	valueStrings := make([]string, 0, len(metrics))
+	valueArgs := make([]interface{}, 0, len(metrics)*4)
+
+	for i, m := range metrics {
+		argStart := i*4 + 1
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", argStart, argStart+1, argStart+2, argStart+3))
+
+		var val interface{}
+		var delta interface{}
+
+		if m.MType == "gauge" {
+			val = *m.Value
+		}
+		if m.MType == "counter" {
+			delta = *m.Delta
+		}
+
+		valueArgs = append(valueArgs, m.ID, m.MType, val, delta)
+	}
+
+	query := fmt.Sprintf(`
+        INSERT INTO metrics (name, type, value, delta)
+        VALUES %s
+        ON CONFLICT (name) DO UPDATE
+        SET type = EXCLUDED.type,
+            value = EXCLUDED.value,
+            delta = EXCLUDED.delta
+    `, strings.Join(valueStrings, ","))
+
+	_, err := s.db.Exec(query, valueArgs...)
+	return err
 }
 
 func (d *DBStorage) GetAll() ([]models.Metrics, error) {
@@ -161,6 +198,10 @@ func (m *MemStorage) GetCounter(name string) (Counter, error) {
 		return 0, errors.New("metric not found")
 	}
 	return val, nil
+}
+
+func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
+	return nil
 }
 
 func (m *MemStorage) GetAll() ([]models.Metrics, error) {

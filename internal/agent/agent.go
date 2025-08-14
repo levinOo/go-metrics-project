@@ -4,18 +4,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/caarlos0/env/v11"
-	"github.com/go-resty/resty/v2"
+	"github.com/hashicorp/go-retryablehttp"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
 	"github.com/levinOo/go-metrics-project/internal/models"
 )
@@ -66,10 +64,6 @@ func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) 
 }
 
 func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
-	if len(metrics) == 0 {
-		return nil
-	}
-
 	url, err := url.JoinPath(endpoint, "updates")
 	if err != nil {
 		return fmt.Errorf("failed to join URL path: %w", err)
@@ -85,24 +79,46 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
 		return fmt.Errorf("failed to compress data: %w", err)
 	}
 
-	client := resty.New()
-	resp, err := client.R().
-		SetHeader("Content-Type", "application/json").
-		SetHeader("Accept", "application/json").
-		SetHeader("Content-Encoding", "gzip").
-		SetHeader("Accept-Encoding", "gzip").
-		SetBody(buffer).
-		Post(url)
+	client := retryablehttp.NewClient()
+	client.RetryMax = 3
+	client.RetryWaitMax = 3 * time.Second
+	client.RetryWaitMin = 1 * time.Second
+	client.Backoff = customBackoff
 
+	client.Backoff = customBackoff
+
+	req, err := retryablehttp.NewRequest("POST", url, buffer)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch request: %w", err)
 	}
+	defer resp.Body.Close()
 
-	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("server returned status %d: %s", resp.StatusCode(), resp.String())
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 
 	return nil
+}
+
+func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
+	delays := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
+
+	indx := attemptNum
+	if indx >= len(delays) {
+		indx = len(delays) - 1
+	}
+
+	return delays[indx]
 }
 
 func CompressData(data []byte) ([]byte, error) {
@@ -151,27 +167,7 @@ func StartAgent() <-chan error {
 				m.CollectMetrics()
 
 			case <-reqTicker.C:
-				var connRefusedErr = syscall.ECONNREFUSED
 				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m)
-
-				if errors.Is(err, connRefusedErr) {
-					intervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
-
-					for i := 0; i < 3; i++ {
-						log.Printf("Retry attempt %d after error: %v", i+1, err)
-						time.Sleep(intervals[i])
-
-						err = SendAllMetricsBatch(&http.Client{}, endpoint, *m)
-						if err == nil {
-							log.Printf("Success after %d retries", i+1)
-							break
-						}
-
-						if !errors.Is(err, connRefusedErr) {
-							break
-						}
-					}
-				}
 
 				if err != nil {
 					log.Printf("Final sending metrics error: %v", err)
