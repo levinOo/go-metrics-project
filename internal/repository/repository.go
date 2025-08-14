@@ -201,6 +201,20 @@ func (m *MemStorage) GetCounter(name string) (Counter, error) {
 }
 
 func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, metric := range metrics {
+		switch metric.MType {
+		case "gauge":
+			m.Gauges[metric.ID] = Gauge(*metric.Value)
+		case "counter":
+			m.Counters[metric.ID] += Counter(*metric.Delta)
+		default:
+			continue
+		}
+	}
+
 	return nil
 }
 

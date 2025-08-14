@@ -122,10 +122,27 @@ func UpdatesValuesHandler(storage repository.Storage) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		err = storage.InsertMetricsBatch(metrics)
-		if err != nil {
-			http.Error(rw, "Internal server error", http.StatusInternalServerError)
-			return
+		for _, metric := range metrics {
+			switch metric.MType {
+			case "gauge":
+				if metric.Value != nil {
+					err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
+					if err != nil {
+						http.Error(rw, "Internal server error", http.StatusInternalServerError)
+						return
+					}
+				}
+			case "counter":
+				if metric.Delta != nil {
+					err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
+					if err != nil {
+						http.Error(rw, "Internal server error", http.StatusInternalServerError)
+						return
+					}
+				}
+			default:
+				log.Printf("Unknown metric type: %s for metric %s", metric.MType, metric.ID)
+			}
 		}
 
 		accept := r.Header.Get("Accept")
