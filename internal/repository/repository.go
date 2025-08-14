@@ -74,53 +74,48 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	valueStrings := make([]string, 0, len(metrics))
 	valueArgs := make([]interface{}, 0, len(metrics)*4)
+	argIndex := 1
 
-	for i, m := range metrics {
+	for _, metric := range metrics {
+		var val interface{} = nil
+		var delta interface{} = nil
 
-		argStart := i*4 + 1
-		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", argStart, argStart+1, argStart+2, argStart+3))
-
-		var val interface{}
-		var delta interface{}
-
-		switch m.MType {
+		switch metric.MType {
 		case "gauge":
-			val = *m.Value
-			delta = nil
+			val = *metric.Value
 		case "counter":
-			val = nil
-			delta = *m.Delta
+			delta = *metric.Delta
 		default:
-			log.Printf("Skipping metric %s: unknown type %s", m.ID, m.MType)
 			continue
 		}
 
-		valueArgs = append(valueArgs, m.ID, m.MType, val, delta)
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", argIndex, argIndex+1, argIndex+2, argIndex+3))
+		valueArgs = append(valueArgs, metric.ID, delta, metric.MType, val)
+		argIndex += 4
 	}
 
 	query := fmt.Sprintf(`
-        INSERT INTO metrics (name, type, value, delta)
-        VALUES %s
-        ON CONFLICT (name) DO UPDATE
-        SET type = EXCLUDED.type,
-            value = CASE 
-                WHEN EXCLUDED.type = 'gauge' THEN EXCLUDED.value 
-                ELSE metrics.value 
-            END,
-            delta = CASE 
-                WHEN EXCLUDED.type = 'counter' THEN metrics.delta + EXCLUDED.delta 
-                ELSE EXCLUDED.delta 
-            END
-    `, strings.Join(valueStrings, ","))
+		INSERT INTO metrics (name, delta, type, value)
+		VALUES %s
+		ON CONFLICT (name) DO UPDATE
+		SET type = EXCLUDED.type,
+			delta = CASE 
+				WHEN EXCLUDED.type = 'counter' THEN metrics.delta + EXCLUDED.delta 
+				ELSE EXCLUDED.delta 
+			END,
+			value = CASE 
+				WHEN EXCLUDED.type = 'gauge' THEN EXCLUDED.value 
+				ELSE metrics.value 
+			END
+	`, strings.Join(valueStrings, ","))
 
 	_, err := d.db.Exec(query, valueArgs...)
 	if err != nil {
-		log.Printf("Database error in InsertMetricsBatch: %v", err)
-		log.Printf("Query: %s", query)
-		log.Printf("Args: %v", valueArgs)
+		log.Printf("Batch insert error: %v", err)
+		return err
 	}
 
-	return err
+	return nil
 }
 
 func (d *DBStorage) GetAll() ([]models.Metrics, error) {
