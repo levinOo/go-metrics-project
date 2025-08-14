@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/levinOo/go-metrics-project/internal/config"
-	"github.com/levinOo/go-metrics-project/internal/handler"
+	"github.com/levinOo/go-metrics-project/internal/service"
 )
 
 func main() {
@@ -20,6 +20,6 @@ func run() error {
 		return fmt.Errorf("ошибка парсинга ENV: %w", err)
 	}
 
-	return handler.Serve(cfg)
+	return service.Serve(cfg)
 
 }
