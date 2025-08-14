@@ -202,9 +202,6 @@ func (m *MemStorage) GetCounter(name string) (Counter, error) {
 }
 
 func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for _, metric := range metrics {
 		switch metric.MType {
 		case "gauge":
