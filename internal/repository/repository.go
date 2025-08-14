@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -207,9 +208,15 @@ func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	for _, metric := range metrics {
 		switch metric.MType {
 		case "gauge":
-			m.Gauges[metric.ID] = Gauge(*metric.Value)
+			err := m.SetGauge(metric.ID, Gauge(*metric.Value))
+			if err != nil {
+				log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+			}
 		case "counter":
-			m.Counters[metric.ID] += Counter(*metric.Delta)
+			err := m.SetCounter(metric.ID, Counter(*metric.Delta))
+			if err != nil {
+				log.Printf("Failed to set counter %s: %v", metric.ID, err)
+			}
 		default:
 			continue
 		}
