@@ -76,7 +76,6 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 		return nil
 	}
 
-	// Группировка метрик по ID
 	type batchItem struct {
 		MType string
 		Value *float64
@@ -114,7 +113,6 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 		return nil
 	}
 
-	// Подготовка SQL
 	valueStrings := make([]string, 0, len(tmp))
 	valueArgs := make([]interface{}, 0, len(tmp)*4)
 	argIndex := 1

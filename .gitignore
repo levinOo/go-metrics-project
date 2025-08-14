@@ -30,3 +30,4 @@ vendor/
 
 # JSON files in server
 cmd/server/*.json
+cmd/server/storage.json
