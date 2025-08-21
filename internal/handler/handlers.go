@@ -262,12 +262,17 @@ func UpdateJSONHandler(storage repository.Storage) http.HandlerFunc {
 }
 
 func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
+	writeJSONError := func(rw http.ResponseWriter, msg string, status int) {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(status)
+		_ = json.NewEncoder(rw).Encode(map[string]string{"error": msg})
+	}
+
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		err := json.NewDecoder(r.Body).Decode(&metric)
-		if err != nil {
-			http.Error(rw, "", http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&metric); err != nil {
+			writeJSONError(rw, "decode error", http.StatusBadRequest)
 			return
 		}
 
@@ -276,7 +281,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			val, err := storage.GetGauge(metric.ID)
 			if err != nil {
 				log.Printf("write error: %v", err)
-				rw.WriteHeader(http.StatusNotFound)
+				writeJSONError(rw, "not found", http.StatusNotFound)
 				return
 			}
 			metric.Value = new(float64)
@@ -286,32 +291,33 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			val, err := storage.GetCounter(metric.ID)
 			if err != nil {
 				log.Printf("write error: %v", err)
-				rw.WriteHeader(http.StatusNotFound)
+				writeJSONError(rw, "not found", http.StatusNotFound)
 				return
 			}
 			metric.Delta = new(int64)
 			*metric.Delta = int64(val)
 
 		default:
-			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			writeJSONError(rw, "unknown type of metric", http.StatusBadRequest)
 			return
 		}
 
 		data, err := json.Marshal(metric)
 		if err != nil {
-			http.Error(rw, "encode error", http.StatusInternalServerError)
+			writeJSONError(rw, "encode error", http.StatusInternalServerError)
 			return
 		}
+
 		if key != "" {
-			hash := sha256.Sum256(data)
-			rw.Header().Set("HashSHA256", hex.EncodeToString(hash[:]))
+			h := sha256.Sum256(append(data, []byte(key)...))
+			rw.Header().Set("HashSHA256", hex.EncodeToString(h[:]))
 		}
+
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
 
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			rw.Header().Set("Content-Encoding", "gzip")
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusOK)
-
 			gz := gzip.NewWriter(rw)
 			defer gz.Close()
 
@@ -320,9 +326,6 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 				log.Printf("response gzip encode error: %v", err)
 			}
 		} else {
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusOK)
-
 			_, err = rw.Write(data)
 			if err != nil {
 				log.Printf("response encode error: %v", err)

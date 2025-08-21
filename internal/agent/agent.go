@@ -79,7 +79,7 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) err
 
 	var hashString string
 	if key != "" {
-		hashString = calculateSHA256Hash(data)
+		hashString = calculateSHA256Hash(data, key)
 	}
 
 	buffer, err := CompressData(data)
@@ -133,8 +133,8 @@ func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) 
 	return delays[indx]
 }
 
-func calculateSHA256Hash(data []byte) string {
-	hash := sha256.Sum256(data)
+func calculateSHA256Hash(data []byte, key string) string {
+	hash := sha256.Sum256(append(data, []byte(key)...))
 	return hex.EncodeToString(hash[:])
 }
 
