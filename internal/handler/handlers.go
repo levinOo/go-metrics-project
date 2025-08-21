@@ -129,9 +129,9 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHash := h.Sum(nil)
+			expectedHashHex := hex.EncodeToString(h.Sum(nil))
 
-			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
+			if receivedHashHex != expectedHashHex {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -240,9 +240,9 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHash := h.Sum(nil)
+			expectedHashHex := hex.EncodeToString(h.Sum(nil))
 
-			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
+			if receivedHashHex != expectedHashHex {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -322,9 +322,9 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHash := h.Sum(nil)
+			expectedHashHex := hex.EncodeToString(h.Sum(nil))
 
-			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
+			if receivedHashHex != expectedHashHex {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -368,6 +368,8 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			return
 		}
 
+		rw.Header().Set("Content-Type", "application/json")
+
 		if key != "" {
 			mac := hmac.New(sha256.New, []byte(key))
 			mac.Write(data)
@@ -375,7 +377,6 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			rw.Header().Set("HashSHA256", hex.EncodeToString(sig))
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			rw.Header().Set("Content-Encoding", "gzip")
 			rw.WriteHeader(http.StatusOK)
