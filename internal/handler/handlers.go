@@ -82,9 +82,17 @@ func DecryptMiddleware(h http.Handler, key string) http.HandlerFunc {
 			return
 		}
 
-		hash := r.Header.Get("HashSHA256")
-		if key != hash {
-			http.Error(rw, "Incorrect hash key", http.StatusBadRequest)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "cannot read body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		hashHeader := r.Header.Get("HashSHA256")
+		expectedHash := sha256.Sum256(append(body, []byte(key)...))
+		if hex.EncodeToString(expectedHash[:]) != hashHeader {
+			http.Error(rw, "incorrect hash", http.StatusBadRequest)
 			return
 		}
 
@@ -262,17 +270,12 @@ func UpdateJSONHandler(storage repository.Storage) http.HandlerFunc {
 }
 
 func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
-	writeJSONError := func(rw http.ResponseWriter, msg string, status int) {
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(status)
-		_ = json.NewEncoder(rw).Encode(map[string]string{"error": msg})
-	}
-
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		if err := json.NewDecoder(r.Body).Decode(&metric); err != nil {
-			writeJSONError(rw, "decode error", http.StatusBadRequest)
+		err := json.NewDecoder(r.Body).Decode(&metric)
+		if err != nil {
+			http.Error(rw, "", http.StatusBadRequest)
 			return
 		}
 
@@ -281,7 +284,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			val, err := storage.GetGauge(metric.ID)
 			if err != nil {
 				log.Printf("write error: %v", err)
-				writeJSONError(rw, "not found", http.StatusNotFound)
+				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
 			metric.Value = new(float64)
@@ -291,33 +294,32 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			val, err := storage.GetCounter(metric.ID)
 			if err != nil {
 				log.Printf("write error: %v", err)
-				writeJSONError(rw, "not found", http.StatusNotFound)
+				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
 			metric.Delta = new(int64)
 			*metric.Delta = int64(val)
 
 		default:
-			writeJSONError(rw, "unknown type of metric", http.StatusBadRequest)
+			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
 			return
 		}
 
 		data, err := json.Marshal(metric)
 		if err != nil {
-			writeJSONError(rw, "encode error", http.StatusInternalServerError)
+			http.Error(rw, "encode error", http.StatusInternalServerError)
 			return
 		}
-
 		if key != "" {
 			h := sha256.Sum256(append(data, []byte(key)...))
 			rw.Header().Set("HashSHA256", hex.EncodeToString(h[:]))
 		}
 
-		rw.Header().Set("Content-Type", "application/json")
-		rw.WriteHeader(http.StatusOK)
-
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			rw.Header().Set("Content-Encoding", "gzip")
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusOK)
+
 			gz := gzip.NewWriter(rw)
 			defer gz.Close()
 
@@ -326,6 +328,9 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 				log.Printf("response gzip encode error: %v", err)
 			}
 		} else {
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusOK)
+
 			_, err = rw.Write(data)
 			if err != nil {
 				log.Printf("response encode error: %v", err)
