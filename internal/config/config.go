@@ -19,7 +19,7 @@ func GetConfig() (Config, error) {
 	storeIntFlag := flag.String("i", "300", "store interval in seconds")
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
-	addrDBFlag := flag.String("d", "host=localhost port=5432 user=mihailtur password=yourpassword dbname=postgres sslmode=disable", "Database addres")
+	addrDBFlag := flag.String("d", "", "Database addres")
 
 	flag.Parse()
 
