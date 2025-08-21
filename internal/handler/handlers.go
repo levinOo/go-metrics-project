@@ -85,16 +85,18 @@ func DecryptMiddleware(h http.Handler, key string) http.HandlerFunc {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			rw.Header().Set("Content-Type", "application/json")
-			http.Error(rw, `{"error":"cannot read body"}`, http.StatusBadRequest)
+			rw.WriteHeader(http.StatusBadRequest)
+			rw.Write([]byte(`{"error":"cannot read body"}`))
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-		hashHeader := r.Header.Get("HashSHA256")
+		hashHeader := strings.ToLower(r.Header.Get("HashSHA256"))
 		expectedHash := sha256.Sum256(append(body, []byte(key)...))
-		if hex.EncodeToString(expectedHash[:]) != strings.ToLower(hashHeader) {
+		if strings.ToLower(hex.EncodeToString(expectedHash[:])) != hashHeader {
 			rw.Header().Set("Content-Type", "application/json")
-			http.Error(rw, `{"error":"incorrect hash"}`, http.StatusBadRequest)
+			rw.WriteHeader(http.StatusBadRequest)
+			rw.Write([]byte(`{"error":"incorrect hash"}`))
 			return
 		}
 
