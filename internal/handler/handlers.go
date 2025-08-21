@@ -30,19 +30,19 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
 	r.Get("/ping", LoggerFuncServer(PingHandler(storage), sugar))
 
-	r.Post("/updates", LoggerFuncServer(DecryptMiddleware(DecompressMiddleware(UpdatesValuesHandler(storage)), cfg.Key), sugar))
-	r.Post("/updates/", LoggerFuncServer(DecryptMiddleware(DecompressMiddleware(UpdatesValuesHandler(storage)), cfg.Key), sugar))
+	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage, cfg.Key)), sugar))
+	r.Post("/updates/", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage, cfg.Key)), sugar))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", LoggerFuncServer(DecryptMiddleware(DecompressMiddleware(UpdateJSONHandler(storage)), cfg.Key), sugar))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage, cfg.Key)), sugar))
 		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage, sugar), sugar))
 	})
 
-	r.Post("/value/", LoggerFuncServer(DecryptMiddleware(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), cfg.Key), sugar))
+	r.Post("/value/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), sugar))
 
 	r.Route("/value", func(r chi.Router) {
 		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage), sugar))
-		r.Post("/", LoggerFuncServer(DecryptMiddleware(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), cfg.Key), sugar))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), sugar))
 	})
 
 	return r
@@ -74,35 +74,6 @@ func LoggerFuncServer(h http.Handler, sugar *zap.SugaredLogger) http.HandlerFunc
 		)
 	}
 	return http.HandlerFunc(logFn)
-}
-
-func DecryptMiddleware(h http.Handler, key string) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		if key != "" {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(rw, "read body error", http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			receivedHashHex := r.Header.Get("HashSHA256")
-			receivedHash, err := hex.DecodeString(receivedHashHex)
-			if err != nil {
-				http.Error(rw, "invalid hash format", http.StatusBadRequest)
-				return
-			}
-
-			hash := sha256.Sum256(append(body, []byte(key)...))
-
-			if !hmac.Equal(receivedHash, hash[:]) {
-				http.Error(rw, "invalid hash", http.StatusBadRequest)
-				return
-			}
-		}
-
-		h.ServeHTTP(rw, r)
-	}
 }
 
 func DecompressMiddleware(h http.Handler) http.HandlerFunc {
@@ -144,41 +115,73 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	}
 }
 
-func UpdatesValuesHandler(storage repository.Storage) http.HandlerFunc {
+func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metrics []models.Metrics
-
-		err := json.NewDecoder(r.Body).Decode(&metrics)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(rw, "Invalid JSON format", http.StatusBadRequest)
+			http.Error(rw, "read body error", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		if key != "" {
+			receivedHashHex := r.Header.Get("HashSHA256")
+			receivedHash, err := hex.DecodeString(receivedHashHex)
+			if err != nil {
+				http.Error(rw, "invalid hash format", http.StatusBadRequest)
+				return
+			}
+
+			hash := sha256.Sum256(append(body, []byte(key)...))
+			if !hmac.Equal(receivedHash, hash[:]) {
+				http.Error(rw, "invalid hash", http.StatusBadRequest)
+				return
+			}
+		}
+
+		var metrics []models.Metrics
+		err = json.NewDecoder(r.Body).Decode(&metrics)
+		if err != nil {
+			http.Error(rw, "invalid JSON format", http.StatusBadRequest)
 			return
 		}
 		defer r.Body.Close()
 
 		err = storage.InsertMetricsBatch(metrics)
 		if err != nil {
-			http.Error(rw, "Internal server error", http.StatusInternalServerError)
+			http.Error(rw, "internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		accept := r.Header.Get("Accept")
+		response := map[string]string{"status": "ok"}
+		data, err := json.Marshal(response)
+		if err != nil {
+			http.Error(rw, "encode error", http.StatusInternalServerError)
+			return
+		}
 
-		if strings.Contains(accept, "application/json") {
+		if key != "" {
+			mac := hmac.New(sha256.New, []byte(key))
+			mac.Write(data)
+			sig := mac.Sum(nil)
+			rw.Header().Set("HashSHA256", hex.EncodeToString(sig))
+		}
+
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusOK)
 
-			response := map[string]string{"status": "ok"}
-			if err := json.NewEncoder(rw).Encode(response); err != nil {
-				log.Printf("json encode error: %v", err)
+			_, err := rw.Write(data)
+			if err != nil {
+				log.Printf("json write error: %v", err)
 			}
-
 		} else {
 			rw.Header().Set("Content-Type", "text/html")
 			rw.WriteHeader(http.StatusOK)
 
-			_, err = rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
+			_, err := rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
 			if err != nil {
-				log.Printf("write html error: %v", err)
+				log.Printf("html write error: %v", err)
 			}
 		}
 	}
@@ -225,50 +228,83 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 	}
 }
 
-func UpdateJSONHandler(storage repository.Storage) http.HandlerFunc {
+func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metric models.Metrics
-
-		err := json.NewDecoder(r.Body).Decode(&metric)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(rw, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			http.Error(rw, "read body error", http.StatusBadRequest)
 			return
 		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		if key != "" {
+			receivedHashHex := r.Header.Get("HashSHA256")
+			receivedHash, err := hex.DecodeString(receivedHashHex)
+			if err != nil {
+				http.Error(rw, "invalid hash format", http.StatusBadRequest)
+				return
+			}
+
+			hash := sha256.Sum256(append(body, []byte(key)...))
+			if !hmac.Equal(receivedHash, hash[:]) {
+				http.Error(rw, "invalid hash", http.StatusBadRequest)
+				return
+			}
+		}
+
+		var metric models.Metrics
+		err = json.NewDecoder(r.Body).Decode(&metric)
+		if err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
 
 		switch metric.MType {
 		case "gauge":
 			err := storage.SetGauge(metric.ID, repository.Gauge(*metric.Value))
 			if err != nil {
-				log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+				log.Printf("failed to set gauge %s: %v", metric.ID, err)
 			}
 		case "counter":
 			err := storage.SetCounter(metric.ID, repository.Counter(*metric.Delta))
 			if err != nil {
-				log.Printf("Failed to set gauge %s: %v", metric.ID, err)
+				log.Printf("failed to set counter %s: %v", metric.ID, err)
 			}
 		default:
-			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			http.Error(rw, "unknown type of metric", http.StatusBadRequest)
 			return
 		}
 
-		accept := r.Header.Get("Accept")
+		response := map[string]string{"status": "ok"}
+		data, err := json.Marshal(response)
+		if err != nil {
+			http.Error(rw, "encode error", http.StatusInternalServerError)
+			return
+		}
 
-		if strings.Contains(accept, "application/json") {
+		if key != "" {
+			mac := hmac.New(sha256.New, []byte(key))
+			mac.Write(data)
+			sig := mac.Sum(nil)
+			rw.Header().Set("HashSHA256", hex.EncodeToString(sig))
+		}
+
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusOK)
 
-			response := map[string]string{"status": "ok"}
-			if err := json.NewEncoder(rw).Encode(response); err != nil {
-				log.Printf("json encode error: %v", err)
+			_, err = rw.Write(data)
+			if err != nil {
+				log.Printf("json write error: %v", err)
 			}
-
 		} else {
 			rw.Header().Set("Content-Type", "text/html")
 			rw.WriteHeader(http.StatusOK)
 
 			_, err = rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
 			if err != nil {
-				log.Printf("write html error: %v", err)
+				log.Printf("html write error: %v", err)
 			}
 		}
 	}
@@ -278,7 +314,29 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		err := json.NewDecoder(r.Body).Decode(&metric)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "read body error", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+		if key != "" {
+			receivedHashHex := r.Header.Get("HashSHA256")
+			receivedHash, err := hex.DecodeString(receivedHashHex)
+			if err != nil {
+				http.Error(rw, "invalid hash format", http.StatusBadRequest)
+				return
+			}
+
+			hash := sha256.Sum256(append(body, []byte(key)...))
+			if !hmac.Equal(receivedHash, hash[:]) {
+				http.Error(rw, "invalid hash", http.StatusBadRequest)
+				return
+			}
+		}
+
+		err = json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "", http.StatusBadRequest)
 			return
@@ -288,7 +346,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 		case "gauge":
 			val, err := storage.GetGauge(metric.ID)
 			if err != nil {
-				log.Printf("write error: %v", err)
+				log.Printf("read gauge error: %v", err)
 				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
@@ -298,7 +356,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 		case "counter":
 			val, err := storage.GetCounter(metric.ID)
 			if err != nil {
-				log.Printf("write error: %v", err)
+				log.Printf("read counter error: %v", err)
 				rw.WriteHeader(http.StatusNotFound)
 				return
 			}
@@ -306,7 +364,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			*metric.Delta = int64(val)
 
 		default:
-			http.Error(rw, "Unknown type of metric", http.StatusBadRequest)
+			http.Error(rw, "unknown type of metric", http.StatusBadRequest)
 			return
 		}
 
@@ -323,9 +381,9 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			rw.Header().Set("HashSHA256", hex.EncodeToString(sig))
 		}
 
+		rw.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			rw.Header().Set("Content-Encoding", "gzip")
-			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusOK)
 
 			gz := gzip.NewWriter(rw)
@@ -336,9 +394,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 				log.Printf("response gzip encode error: %v", err)
 			}
 		} else {
-			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusOK)
-
 			_, err = rw.Write(data)
 			if err != nil {
 				log.Printf("response encode error: %v", err)
