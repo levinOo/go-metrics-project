@@ -134,6 +134,7 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 
 			hash := sha256.Sum256(append(body, []byte(key)...))
 			if !hmac.Equal(receivedHash, hash[:]) {
+				rw.Header().Set("Content-Type", "application/json")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -247,6 +248,7 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 
 			hash := sha256.Sum256(append(body, []byte(key)...))
 			if !hmac.Equal(receivedHash, hash[:]) {
+				rw.Header().Set("Content-Type", "application/json")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -331,6 +333,7 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 
 			hash := sha256.Sum256(append(body, []byte(key)...))
 			if !hmac.Equal(receivedHash, hash[:]) {
+				rw.Header().Set("Content-Type", "application/json")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
