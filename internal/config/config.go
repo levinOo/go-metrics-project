@@ -12,6 +12,7 @@ type Config struct {
 	FileStorage   string `env:"FILE_STORAGE_PATH"`
 	Restore       bool   `env:"RESTORE"`
 	AddrDB        string `env:"DATABASE_DSN"`
+	Key           string `env:"KEY"`
 }
 
 func GetConfig() (Config, error) {
@@ -20,6 +21,7 @@ func GetConfig() (Config, error) {
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
 	addrDBFlag := flag.String("d", "", "Database addres")
+	key := flag.String("k", "", "Hash key")
 
 	flag.Parse()
 
@@ -29,6 +31,7 @@ func GetConfig() (Config, error) {
 		StoreInterval: getInt(os.Getenv("STORE_INTERVAL"), *storeIntFlag),
 		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag),
 		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag),
+		Key:           getString(os.Getenv("KEY"), *key),
 	}
 
 	return cfg, nil
