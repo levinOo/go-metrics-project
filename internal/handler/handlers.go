@@ -126,15 +126,12 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 
 		if key != "" {
 			receivedHashHex := r.Header.Get("HashSHA256")
-			receivedHash, err := hex.DecodeString(receivedHashHex)
-			if err != nil {
-				http.Error(rw, "invalid hash format", http.StatusBadRequest)
-				return
-			}
 
-			hash := sha256.Sum256(append(body, []byte(key)...))
-			if !hmac.Equal(receivedHash, hash[:]) {
-				rw.Header().Set("Content-Type", "application/json")
+			h := hmac.New(sha256.New, []byte(key))
+			h.Write(body)
+			expectedHash := h.Sum(nil)
+
+			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -240,15 +237,12 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 
 		if key != "" {
 			receivedHashHex := r.Header.Get("HashSHA256")
-			receivedHash, err := hex.DecodeString(receivedHashHex)
-			if err != nil {
-				http.Error(rw, "invalid hash format", http.StatusBadRequest)
-				return
-			}
 
-			hash := sha256.Sum256(append(body, []byte(key)...))
-			if !hmac.Equal(receivedHash, hash[:]) {
-				rw.Header().Set("Content-Type", "application/json")
+			h := hmac.New(sha256.New, []byte(key))
+			h.Write(body)
+			expectedHash := h.Sum(nil)
+
+			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -325,15 +319,12 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 
 		if key != "" {
 			receivedHashHex := r.Header.Get("HashSHA256")
-			receivedHash, err := hex.DecodeString(receivedHashHex)
-			if err != nil {
-				http.Error(rw, "invalid hash format", http.StatusBadRequest)
-				return
-			}
 
-			hash := sha256.Sum256(append(body, []byte(key)...))
-			if !hmac.Equal(receivedHash, hash[:]) {
-				rw.Header().Set("Content-Type", "application/json")
+			h := hmac.New(sha256.New, []byte(key))
+			h.Write(body)
+			expectedHash := h.Sum(nil)
+
+			if !hmac.Equal([]byte(receivedHashHex), []byte(expectedHash)) {
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
