@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -26,6 +27,7 @@ type Config struct {
 	Key          string `env:"KEY"`
 	PollInterval int    `env:"POLL_INTERVAL"`
 	ReqInterval  int    `env:"REPORT_INTERVAL"`
+	RateLimit    int    `env:"RATE_LIMIT"`
 }
 
 func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string) error {
@@ -167,6 +169,7 @@ func StartAgent() <-chan error {
 	flag.StringVar(&cfg.Key, "k", "", "Ключ шифрования")
 	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
 	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
+	flag.IntVar(&cfg.RateLimit, "l", 1, "Значение Rate Limit")
 	flag.Parse()
 
 	err := env.Parse(&cfg)
@@ -178,6 +181,9 @@ func StartAgent() <-chan error {
 	m := store.NewMetricsStorage()
 	endpoint := "http://" + cfg.Addr
 
+	var mu sync.Mutex
+	semaphore := make(chan struct{}, cfg.RateLimit)
+
 	go func() {
 		pollTicker := time.NewTicker(time.Second * time.Duration((cfg.PollInterval)))
 		reqTicker := time.NewTicker(time.Second * time.Duration((cfg.ReqInterval)))
@@ -185,14 +191,29 @@ func StartAgent() <-chan error {
 		for {
 			select {
 			case <-pollTicker.C:
-				m.CollectMetrics()
+				go func() {
+					mu.Lock()
+					m.CollectMetrics()
+					mu.Unlock()
+				}()
+
+				go func() {
+					mu.Lock()
+					m.CollectAdditionalMetrics()
+					mu.Unlock()
+				}()
 
 			case <-reqTicker.C:
-				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key)
+				go func() {
+					semaphore <- struct{}{}
+					defer func() { <-semaphore }()
 
-				if err != nil {
-					log.Printf("Final sending metrics error: %v", err)
-				}
+					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key)
+
+					if err != nil {
+						log.Printf("Final sending metrics error: %v", err)
+					}
+				}()
 			}
 		}
 	}()
