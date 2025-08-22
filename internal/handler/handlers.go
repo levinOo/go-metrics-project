@@ -126,7 +126,10 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 			}
 			r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-			receivedHash := r.Header.Get("HashSHA256")
+			receivedHash := r.Header.Get("Hash")
+			if receivedHash == "" {
+				receivedHash = r.Header.Get("HashSHA256")
+			}
 			sig, err := hex.DecodeString(receivedHash)
 			if err != nil {
 				log.Println("bad hash format")
@@ -247,7 +250,10 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 			}
 			r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-			receivedHash := r.Header.Get("HashSHA256")
+			receivedHash := r.Header.Get("Hash")
+			if receivedHash == "" {
+				receivedHash = r.Header.Get("HashSHA256")
+			}
 			sig, err := hex.DecodeString(receivedHash)
 			if err != nil {
 				log.Println("bad hash format")
@@ -339,7 +345,10 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 			}
 			r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-			receivedHash := r.Header.Get("HashSHA256")
+			receivedHash := r.Header.Get("Hash")
+			if receivedHash == "" {
+				receivedHash = r.Header.Get("HashSHA256")
+			}
 			sig, err := hex.DecodeString(receivedHash)
 			if err != nil {
 				log.Println("bad hash format")
