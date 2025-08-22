@@ -117,28 +117,36 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 
 func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(rw, "read body error", http.StatusBadRequest)
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
-
 		if key != "" {
-			receivedHashHex := r.Header.Get("HashSHA256")
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Println("error reading r.body")
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+			receivedHash := r.Header.Get("HashSHA256")
+			sig, err := hex.DecodeString(receivedHash)
+			if err != nil {
+				log.Println("bad hash format")
+				http.Error(rw, "bad hash format", http.StatusBadRequest)
+				return
+			}
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHashHex := hex.EncodeToString(h.Sum(nil))
+			expectedSig := h.Sum(nil)
 
-			if receivedHashHex != expectedHashHex {
+			if !hmac.Equal(expectedSig, sig) {
+				log.Println("Incorrect hash")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
 		}
 
 		var metrics []models.Metrics
-		err = json.NewDecoder(r.Body).Decode(&metrics)
+		err := json.NewDecoder(r.Body).Decode(&metrics)
 		if err != nil {
 			http.Error(rw, "invalid JSON format", http.StatusBadRequest)
 			return
@@ -228,28 +236,36 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 
 func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(rw, "read body error", http.StatusBadRequest)
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
-
 		if key != "" {
-			receivedHashHex := r.Header.Get("HashSHA256")
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Println("error reading r.body")
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+			receivedHash := r.Header.Get("HashSHA256")
+			sig, err := hex.DecodeString(receivedHash)
+			if err != nil {
+				log.Println("bad hash format")
+				http.Error(rw, "bad hash format", http.StatusBadRequest)
+				return
+			}
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHashHex := hex.EncodeToString(h.Sum(nil))
+			expectedSig := h.Sum(nil)
 
-			if receivedHashHex != expectedHashHex {
+			if !hmac.Equal(expectedSig, sig) {
+				log.Println("Incorrect hash")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
 		}
 
 		var metric models.Metrics
-		err = json.NewDecoder(r.Body).Decode(&metric)
+		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
@@ -310,27 +326,35 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(rw, "read body error", http.StatusBadRequest)
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
-
 		if key != "" {
-			receivedHashHex := r.Header.Get("HashSHA256")
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Println("error reading r.body")
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+			receivedHash := r.Header.Get("HashSHA256")
+			sig, err := hex.DecodeString(receivedHash)
+			if err != nil {
+				log.Println("bad hash format")
+				http.Error(rw, "bad hash format", http.StatusBadRequest)
+				return
+			}
 
 			h := hmac.New(sha256.New, []byte(key))
 			h.Write(body)
-			expectedHashHex := hex.EncodeToString(h.Sum(nil))
+			expectedSig := h.Sum(nil)
 
-			if receivedHashHex != expectedHashHex {
+			if !hmac.Equal(expectedSig, sig) {
+				log.Println("Incorrect hash")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
 		}
 
-		err = json.NewDecoder(r.Body).Decode(&metric)
+		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "", http.StatusBadRequest)
 			return
