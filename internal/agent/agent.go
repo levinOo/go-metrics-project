@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -134,8 +135,10 @@ func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) 
 }
 
 func calculateSHA256Hash(data []byte, key string) string {
-	hash := sha256.Sum256(append(data, []byte(key)...))
-	return hex.EncodeToString(hash[:])
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	hash := h.Sum(nil)
+	return hex.EncodeToString(hash)
 }
 
 func CompressData(data []byte) ([]byte, error) {

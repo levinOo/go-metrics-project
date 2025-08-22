@@ -140,6 +140,8 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 
 			if !hmac.Equal(expectedSig, sig) {
 				log.Println("Incorrect hash")
+				log.Println("Hashes 1: ", expectedSig)
+				log.Println(" 2: ", sig)
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -258,8 +260,9 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 			expectedSig := h.Sum(nil)
 
 			if !hmac.Equal(expectedSig, sig) {
-				log.Println("Hashes 1: ", expectedSig, " 2: ", sig)
 				log.Println("Incorrect hash")
+				log.Println("Hashes 1: ", expectedSig)
+				log.Println(" 2: ", sig)
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
@@ -350,6 +353,8 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 
 			if !hmac.Equal(expectedSig, sig) {
 				log.Println("Incorrect hash")
+				log.Println("Hashes 1: ", expectedSig)
+				log.Println(" 2: ", sig)
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
 			}
