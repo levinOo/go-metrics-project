@@ -30,19 +30,19 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
 	r.Get("/ping", LoggerFuncServer(PingHandler(storage), sugar))
 
-	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage, cfg.Key)), sugar))
-	r.Post("/updates/", LoggerFuncServer(DecompressMiddleware(UpdatesValuesHandler(storage, cfg.Key)), sugar))
+	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdatesValuesHandler(storage, cfg.Key), cfg.Key)), sugar))
+	r.Post("/updates/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdatesValuesHandler(storage, cfg.Key), cfg.Key)), sugar))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(UpdateJSONHandler(storage, cfg.Key)), sugar))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdateJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
 		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage, sugar), sugar))
 	})
 
-	r.Post("/value/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), sugar))
+	r.Post("/value/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(GetJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
 
 	r.Route("/value", func(r chi.Router) {
 		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage), sugar))
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(GetJSONHandler(storage, cfg.Key)), sugar))
+		r.Post("/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(GetJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
 	})
 
 	return r
@@ -99,6 +99,58 @@ func DecompressMiddleware(h http.Handler) http.HandlerFunc {
 	}
 }
 
+func DecryptMiddlewre(h http.Handler, key string) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		receivedHash := r.Header.Get("Hash")
+
+		if receivedHash == "" {
+			receivedHash = r.Header.Get("HashSHA256")
+		}
+
+		if receivedHash == "" || receivedHash == "none" {
+			h.ServeHTTP(rw, r)
+			return
+		}
+
+		if key != "" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Println("error reading r.body")
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+			receivedHash := r.Header.Get("Hash")
+			if receivedHash == "" {
+				receivedHash = r.Header.Get("HashSHA256")
+			}
+
+			sig, err := hex.DecodeString(receivedHash)
+			if err != nil {
+				log.Println("bad hash format")
+				http.Error(rw, "bad hash format", http.StatusBadRequest)
+				return
+			}
+
+			hash := hmac.New(sha256.New, []byte(key))
+			hash.Write(body)
+			expectedSig := hash.Sum(nil)
+
+			if !hmac.Equal(expectedSig, sig) {
+				log.Println("Incorrect hash")
+				log.Println("Hashes 1: ", expectedSig)
+				log.Println(" 2: ", sig)
+				http.Error(rw, "invalid hash", http.StatusBadRequest)
+				return
+			}
+			h.ServeHTTP(rw, r)
+		}
+
+		h.ServeHTTP(rw, r)
+	}
+}
+
 func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -117,40 +169,8 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 
 func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		if key != "" {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Println("error reading r.body")
-				http.Error(rw, "read body error", http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			receivedHash := r.Header.Get("Hash")
-			if receivedHash == "" {
-				receivedHash = r.Header.Get("HashSHA256")
-			}
-			sig, err := hex.DecodeString(receivedHash)
-			if err != nil {
-				log.Println("bad hash format")
-				http.Error(rw, "bad hash format", http.StatusBadRequest)
-				return
-			}
-
-			h := hmac.New(sha256.New, []byte(key))
-			h.Write(body)
-			expectedSig := h.Sum(nil)
-
-			if !hmac.Equal(expectedSig, sig) {
-				log.Println("Incorrect hash")
-				log.Println("Hashes 1: ", expectedSig)
-				log.Println(" 2: ", sig)
-				http.Error(rw, "invalid hash", http.StatusBadRequest)
-				return
-			}
-		}
-
 		var metrics []models.Metrics
+
 		err := json.NewDecoder(r.Body).Decode(&metrics)
 		if err != nil {
 			http.Error(rw, "invalid JSON format", http.StatusBadRequest)
@@ -241,40 +261,8 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 
 func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		if key != "" {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Println("error reading r.body")
-				http.Error(rw, "read body error", http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			receivedHash := r.Header.Get("Hash")
-			if receivedHash == "" {
-				receivedHash = r.Header.Get("HashSHA256")
-			}
-			sig, err := hex.DecodeString(receivedHash)
-			if err != nil {
-				log.Println("bad hash format")
-				http.Error(rw, "bad hash format", http.StatusBadRequest)
-				return
-			}
-
-			h := hmac.New(sha256.New, []byte(key))
-			h.Write(body)
-			expectedSig := h.Sum(nil)
-
-			if !hmac.Equal(expectedSig, sig) {
-				log.Println("Incorrect hash")
-				log.Println("Hashes 1: ", expectedSig)
-				log.Println(" 2: ", sig)
-				http.Error(rw, "invalid hash", http.StatusBadRequest)
-				return
-			}
-		}
-
 		var metric models.Metrics
+
 		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
 			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -335,39 +323,6 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
-
-		if key != "" {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Println("error reading r.body")
-				http.Error(rw, "read body error", http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
-			receivedHash := r.Header.Get("Hash")
-			if receivedHash == "" {
-				receivedHash = r.Header.Get("HashSHA256")
-			}
-			sig, err := hex.DecodeString(receivedHash)
-			if err != nil {
-				log.Println("bad hash format")
-				http.Error(rw, "bad hash format", http.StatusBadRequest)
-				return
-			}
-
-			h := hmac.New(sha256.New, []byte(key))
-			h.Write(body)
-			expectedSig := h.Sum(nil)
-
-			if !hmac.Equal(expectedSig, sig) {
-				log.Println("Incorrect hash")
-				log.Println("Hashes 1: ", expectedSig)
-				log.Println(" 2: ", sig)
-				http.Error(rw, "invalid hash", http.StatusBadRequest)
-				return
-			}
-		}
 
 		err := json.NewDecoder(r.Body).Decode(&metric)
 		if err != nil {
