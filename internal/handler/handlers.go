@@ -258,6 +258,7 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 			expectedSig := h.Sum(nil)
 
 			if !hmac.Equal(expectedSig, sig) {
+				log.Println("Hashes 1: ", expectedSig, " 2: ", sig)
 				log.Println("Incorrect hash")
 				http.Error(rw, "invalid hash", http.StatusBadRequest)
 				return
