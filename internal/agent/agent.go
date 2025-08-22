@@ -3,6 +3,9 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,11 +23,12 @@ import (
 
 type Config struct {
 	Addr         string `env:"ADDRESS"`
+	Key          string `env:"KEY"`
 	PollInterval int    `env:"POLL_INTERVAL"`
 	ReqInterval  int    `env:"REPORT_INTERVAL"`
 }
 
-func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) error {
+func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string) error {
 	metrics := m.ValuesAllTyped()
 	var metricsList []models.Metrics
 
@@ -60,10 +64,10 @@ func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) 
 		return nil
 	}
 
-	return sendMetricsBatch(metricsList, endpoint)
+	return sendMetricsBatch(metricsList, endpoint, key)
 }
 
-func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
+func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) error {
 	url, err := url.JoinPath(endpoint, "updates")
 	if err != nil {
 		return fmt.Errorf("failed to join URL path: %w", err)
@@ -72,6 +76,11 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metrics: %w", err)
+	}
+
+	var hashString string
+	if key != "" {
+		hashString = calculateSHA256Hash(data, key)
 	}
 
 	buffer, err := CompressData(data)
@@ -97,6 +106,10 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
 
+	if hashString != "" {
+		req.Header.Set("HashSHA256", hashString)
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch request: %w", err)
@@ -119,6 +132,13 @@ func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) 
 	}
 
 	return delays[indx]
+}
+
+func calculateSHA256Hash(data []byte, key string) string {
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	hash := h.Sum(nil)
+	return hex.EncodeToString(hash)
 }
 
 func CompressData(data []byte) ([]byte, error) {
@@ -144,6 +164,7 @@ func StartAgent() <-chan error {
 	errCh := make(chan error)
 
 	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "Адрес сервера")
+	flag.StringVar(&cfg.Key, "k", "", "Ключ шифрования")
 	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
 	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
 	flag.Parse()
@@ -167,7 +188,7 @@ func StartAgent() <-chan error {
 				m.CollectMetrics()
 
 			case <-reqTicker.C:
-				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m)
+				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key)
 
 				if err != nil {
 					log.Printf("Final sending metrics error: %v", err)
