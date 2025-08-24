@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 )
 
@@ -44,9 +45,9 @@ type Metrics struct {
 	TotalAlloc    Gauge
 	RandomValue   Gauge
 
-	TotalMemory     Gauge
-	FreeMemory      Gauge
-	CPUutilization1 Gauge
+	TotalMemory    Gauge
+	FreeMemory     Gauge
+	CPUutilization []Gauge
 
 	PollCount Counter
 }
@@ -159,11 +160,6 @@ func (m *Metrics) CollectMetrics() {
 	m.TotalAlloc = Gauge(stats.TotalAlloc)
 	m.PollCount++
 	m.RandomValue = Gauge(rand.Float64())
-}
-
-func (m *Metrics) CollectAdditionalMetrics() {
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
 
 	memStat, err := mem.VirtualMemory()
 	if err != nil {
@@ -171,6 +167,15 @@ func (m *Metrics) CollectAdditionalMetrics() {
 	}
 
 	m.TotalMemory = Gauge(memStat.Total)
-	m.FreeMemory = Gauge(memStat.Available)
-	m.CPUutilization1 = Gauge(runtime.NumCPU())
+	m.FreeMemory = Gauge(memStat.Free)
+	cpu, err := cpu.Percent(0, true)
+	if err != nil {
+		log.Printf("failed to get CPU stats: %v", err)
+	}
+
+	m.CPUutilization = make([]Gauge, len(cpu))
+
+	for i, val := range cpu {
+		m.CPUutilization[i] = Gauge(val)
+	}
 }

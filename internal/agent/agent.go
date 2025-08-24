@@ -30,40 +30,67 @@ type Config struct {
 	RateLimit    int    `env:"RATE_LIMIT"`
 }
 
-func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string) error {
+func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int) error {
 	metrics := m.ValuesAllTyped()
 	var metricsList []models.Metrics
 
-	for name, metric := range metrics {
-		metricModel := models.Metrics{
-			ID:    name,
-			MType: metric.Type(),
-		}
-
-		var err error
-		switch metric.Type() {
-		case "gauge":
-			metricModel.Value = new(float64)
-			*metricModel.Value, err = strconv.ParseFloat(metric.String(), 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse gauge value for %s: %w", name, err)
+	inputCh := make(chan models.Metrics)
+	errCh := make(chan error)
+	go func() {
+		defer close(inputCh)
+		for name, metric := range metrics {
+			inputCh <- models.Metrics{
+				ID:    name,
+				MType: metric.Type(),
 			}
-		case "counter":
-			metricModel.Delta = new(int64)
-			*metricModel.Delta, err = strconv.ParseInt(metric.String(), 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse counter value for %s: %w", name, err)
-			}
-		default:
-			return fmt.Errorf("unknown metric type: %s for metric %s", metric.Type(), name)
 		}
+	}()
 
-		metricsList = append(metricsList, metricModel)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for w := 1; w <= rateLimit; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for metric := range inputCh {
+				var err error
+				switch metric.MType {
+				case "gauge":
+					metric.Value = new(float64)
+					*metric.Value, err = strconv.ParseFloat(metrics[metric.ID].String(), 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse gauge value for %s: %w", metric.ID, err)
+						return
+					}
+				case "counter":
+					metric.Delta = new(int64)
+					*metric.Delta, err = strconv.ParseInt(metrics[metric.ID].String(), 10, 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse counter value for %s: %w", metric.ID, err)
+						return
+					}
+				default:
+					errCh <- fmt.Errorf("unknown metric type: %s for metric %s", metric.MType, metric.ID)
+					return
+				}
+
+				mu.Lock()
+				metricsList = append(metricsList, metric)
+				mu.Unlock()
+			}
+		}()
 	}
 
-	if len(metricsList) == 0 {
-		log.Println("No metrics to send, skipping batch")
-		return nil
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
 	}
 
 	return sendMetricsBatch(metricsList, endpoint, key)
@@ -181,7 +208,6 @@ func StartAgent() <-chan error {
 	m := store.NewMetricsStorage()
 	endpoint := "http://" + cfg.Addr
 
-	var mu sync.Mutex
 	semaphore := make(chan struct{}, cfg.RateLimit)
 
 	go func() {
@@ -192,15 +218,7 @@ func StartAgent() <-chan error {
 			select {
 			case <-pollTicker.C:
 				go func() {
-					mu.Lock()
 					m.CollectMetrics()
-					mu.Unlock()
-				}()
-
-				go func() {
-					mu.Lock()
-					m.CollectAdditionalMetrics()
-					mu.Unlock()
 				}()
 
 			case <-reqTicker.C:
@@ -208,7 +226,7 @@ func StartAgent() <-chan error {
 					semaphore <- struct{}{}
 					defer func() { <-semaphore }()
 
-					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key)
+					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit)
 
 					if err != nil {
 						log.Printf("Final sending metrics error: %v", err)

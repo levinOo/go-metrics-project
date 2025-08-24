@@ -27,127 +27,129 @@ import (
 func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config) *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Get("/", LoggerFuncServer(GetListHandler(storage), sugar))
-	r.Get("/ping", LoggerFuncServer(PingHandler(storage), sugar))
+	r.Use(LoggerMiddleware(sugar))
+	r.Use(DecompressMiddleware())
+	r.Use(DecryptMiddleware(cfg.Key))
 
-	r.Post("/updates", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdatesValuesHandler(storage, cfg.Key), cfg.Key)), sugar))
-	r.Post("/updates/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdatesValuesHandler(storage, cfg.Key), cfg.Key)), sugar))
+	r.Get("/", GetListHandler(storage))
+	r.Get("/ping", PingHandler(storage))
+
+	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key))
+	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(UpdateJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
-		r.Post("/{typeMetric}/{metric}/{value}", LoggerFuncServer(UpdateValueHandler(storage, sugar), sugar))
+		r.Post("/", UpdateJSONHandler(storage, cfg.Key))
+		r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage, sugar))
 	})
 
-	r.Post("/value/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(GetJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
-
+	r.Post("/value/", GetJSONHandler(storage, cfg.Key))
 	r.Route("/value", func(r chi.Router) {
-		r.Get("/{typeMetric}/{metric}", LoggerFuncServer(GetValueHandler(storage), sugar))
-		r.Post("/", LoggerFuncServer(DecompressMiddleware(DecryptMiddlewre(GetJSONHandler(storage, cfg.Key), cfg.Key)), sugar))
+		r.Get("/{typeMetric}/{metric}", GetValueHandler(storage))
+		r.Post("/", GetJSONHandler(storage, cfg.Key))
 	})
 
 	return r
 }
 
-func LoggerFuncServer(h http.Handler, sugar *zap.SugaredLogger) http.HandlerFunc {
-	logFn := func(rw http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			start := time.Now()
 
-		responseData := &logger.ResponseData{
-			Size:   0,
-			Status: 0,
-		}
-		lw := logger.LoggingRW{
-			ResponseWriter: rw,
-			ResponseData:   responseData,
-		}
-
-		h.ServeHTTP(&lw, r)
-
-		dur := time.Since(start)
-
-		sugar.Infoln(
-			"uri", r.RequestURI,
-			"method", r.Method,
-			"duration", dur,
-			"status", responseData.Status,
-			"size", responseData.Size,
-		)
-	}
-	return http.HandlerFunc(logFn)
-}
-
-func DecompressMiddleware(h http.Handler) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Encoding") == "gzip" {
-			gz, err := gzip.NewReader(r.Body)
-			if err != nil {
-				http.Error(rw, "Failed to decompress gzip body", http.StatusBadRequest)
-				return
+			responseData := &logger.ResponseData{
+				Size:   0,
+				Status: 0,
 			}
-			defer gz.Close()
-
-			body, err := io.ReadAll(gz)
-			if err != nil {
-				http.Error(rw, "Failed to read decompressed body", http.StatusInternalServerError)
-				return
+			lw := logger.LoggingRW{
+				ResponseWriter: rw,
+				ResponseData:   responseData,
 			}
 
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			r.ContentLength = int64(len(body))
-		}
-		h.ServeHTTP(rw, r)
+			h.ServeHTTP(&lw, r)
+
+			dur := time.Since(start)
+
+			sugar.Infoln(
+				"uri", r.RequestURI,
+				"method", r.Method,
+				"duration", dur,
+				"status", responseData.Status,
+				"size", responseData.Size,
+			)
+		})
 	}
 }
 
-func DecryptMiddlewre(h http.Handler, key string) http.HandlerFunc {
-	return func(rw http.ResponseWriter, r *http.Request) {
-		receivedHash := r.Header.Get("Hash")
+func DecompressMiddleware() func(h http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Content-Encoding") == "gzip" {
+				gz, err := gzip.NewReader(r.Body)
+				if err != nil {
+					http.Error(rw, "Failed to decompress gzip body", http.StatusBadRequest)
+					return
+				}
+				defer gz.Close()
 
-		if receivedHash == "" {
-			receivedHash = r.Header.Get("HashSHA256")
-		}
+				body, err := io.ReadAll(gz)
+				if err != nil {
+					http.Error(rw, "Failed to read decompressed body", http.StatusInternalServerError)
+					return
+				}
 
-		if receivedHash == "" || receivedHash == "none" {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.ContentLength = int64(len(body))
+			}
+
 			h.ServeHTTP(rw, r)
-			return
-		}
+		})
+	}
+}
 
-		if key != "" {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Println("error reading r.body")
-				http.Error(rw, "read body error", http.StatusBadRequest)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewBuffer(body))
-
+func DecryptMiddleware(key string) func(h http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 			receivedHash := r.Header.Get("Hash")
 			if receivedHash == "" {
 				receivedHash = r.Header.Get("HashSHA256")
 			}
 
-			sig, err := hex.DecodeString(receivedHash)
-			if err != nil {
-				log.Println("bad hash format")
-				http.Error(rw, "bad hash format", http.StatusBadRequest)
+			if receivedHash == "" || receivedHash == "none" {
+				h.ServeHTTP(rw, r)
 				return
 			}
 
-			hash := hmac.New(sha256.New, []byte(key))
-			hash.Write(body)
-			expectedSig := hash.Sum(nil)
+			if key != "" {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					log.Println("error reading r.Body:", err)
+					http.Error(rw, "read body error", http.StatusBadRequest)
+					return
+				}
 
-			if !hmac.Equal(expectedSig, sig) {
-				log.Println("Incorrect hash")
-				log.Println("Hashes 1: ", expectedSig)
-				log.Println(" 2: ", sig)
-				http.Error(rw, "invalid hash", http.StatusBadRequest)
-				return
+				r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+				sig, err := hex.DecodeString(receivedHash)
+				if err != nil {
+					log.Println("bad hash format")
+					http.Error(rw, "bad hash format", http.StatusBadRequest)
+					return
+				}
+
+				hash := hmac.New(sha256.New, []byte(key))
+				hash.Write(body)
+				expectedSig := hash.Sum(nil)
+
+				if !hmac.Equal(expectedSig, sig) {
+					log.Println("Incorrect hash")
+					log.Printf("Expected: %x, Received: %x\n", expectedSig, sig)
+					http.Error(rw, "invalid hash", http.StatusBadRequest)
+					return
+				}
 			}
+
 			h.ServeHTTP(rw, r)
-		}
-
-		h.ServeHTTP(rw, r)
+		})
 	}
 }
 

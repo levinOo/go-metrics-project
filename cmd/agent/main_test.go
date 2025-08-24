@@ -86,7 +86,7 @@ func TestSendAllMetricsBatch(t *testing.T) {
 	}
 
 	client := &http.Client{}
-	err := agent.SendAllMetricsBatch(client, ts.URL, metrics, "")
+	err := agent.SendAllMetricsBatch(client, ts.URL, metrics, "", 8)
 	if err != nil {
 		t.Errorf("SendAllMetricsBatch failed: %v", err)
 	}
