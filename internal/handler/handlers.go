@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,8 +35,8 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", GetListHandler(storage))
 	r.Get("/ping", PingHandler(storage))
 
-	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key))
-	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key))
+	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditUrl))
+	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditUrl))
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", UpdateJSONHandler(storage, cfg.Key))
@@ -169,9 +170,9 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	}
 }
 
-func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFunc {
+func UpdatesValuesHandler(storage repository.Storage, key, path, url string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metrics []models.Metrics
+		var metrics models.ListMetrics
 
 		err := json.NewDecoder(r.Body).Decode(&metrics)
 		if err != nil {
@@ -185,6 +186,12 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 			http.Error(rw, "internal server error", http.StatusInternalServerError)
 			return
 		}
+
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		metrics.NewAuditEvent(path, url, ip)
 
 		response := map[string]string{"status": "ok"}
 		data, err := json.Marshal(response)

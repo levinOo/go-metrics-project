@@ -13,6 +13,8 @@ type Config struct {
 	Restore       bool   `env:"RESTORE"`
 	AddrDB        string `env:"DATABASE_DSN"`
 	Key           string `env:"KEY"`
+	AuditFile     string `env:"AUDIT_FILE"`
+	AuditUrl      string `env:"AUDIT_URL"`
 }
 
 func GetConfig() (Config, error) {
@@ -22,6 +24,8 @@ func GetConfig() (Config, error) {
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
 	addrDBFlag := flag.String("d", "", "Database addres")
 	key := flag.String("k", "", "Hash key")
+	auditFile := flag.String("p", "./audit.json", "audit file path")
+	auditUrl := flag.String("u", "", "audit url ")
 
 	flag.Parse()
 
@@ -32,6 +36,8 @@ func GetConfig() (Config, error) {
 		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag),
 		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag),
 		Key:           getString(os.Getenv("KEY"), *key),
+		AuditFile:     getString(os.Getenv("AUDIT_FILE"), *auditFile),
+		AuditUrl:      getString(os.Getenv("AUDIT_URL"), *auditUrl),
 	}
 
 	return cfg, nil
