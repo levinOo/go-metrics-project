@@ -32,9 +32,9 @@ type Metrics struct {
 }
 
 type Data struct {
-	Ts          int64    `json:"ts"`
+	TS          int64    `json:"ts"`
 	MetricNames []string `json:"metrics"`
-	Ip          string   `json:"ip_address"`
+	IP          string   `json:"ip_address"`
 }
 
 func (a *Auditer) RegisterClient(o Consumer) {
@@ -125,7 +125,7 @@ func (l *ListMetrics) NewAuditEvent(path, url, ip string) {
 
 	fileAuditer := &FileAuditer{path: path}
 	urlAuditter := &URLAuditer{url: url}
-	data := &Data{Ts: ts, Ip: ip}
+	data := &Data{TS: ts, IP: ip}
 
 	auditer := &Auditer{}
 	auditer.RegisterClient(fileAuditer)

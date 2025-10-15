@@ -35,8 +35,8 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", GetListHandler(storage))
 	r.Get("/ping", PingHandler(storage))
 
-	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditUrl))
-	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditUrl))
+	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL))
+	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL))
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", UpdateJSONHandler(storage, cfg.Key))

@@ -14,7 +14,7 @@ type Config struct {
 	AddrDB        string `env:"DATABASE_DSN"`
 	Key           string `env:"KEY"`
 	AuditFile     string `env:"AUDIT_FILE"`
-	AuditUrl      string `env:"AUDIT_URL"`
+	AuditURL      string `env:"AUDIT_URL"`
 }
 
 func GetConfig() (Config, error) {
@@ -25,7 +25,7 @@ func GetConfig() (Config, error) {
 	addrDBFlag := flag.String("d", "", "Database addres")
 	key := flag.String("k", "", "Hash key")
 	auditFile := flag.String("p", "./audit.json", "audit file path")
-	auditUrl := flag.String("u", "", "audit url ")
+	auditURL := flag.String("u", "", "audit url ")
 
 	flag.Parse()
 
@@ -37,7 +37,7 @@ func GetConfig() (Config, error) {
 		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag),
 		Key:           getString(os.Getenv("KEY"), *key),
 		AuditFile:     getString(os.Getenv("AUDIT_FILE"), *auditFile),
-		AuditUrl:      getString(os.Getenv("AUDIT_URL"), *auditUrl),
+		AuditURL:      getString(os.Getenv("AUDIT_URL"), *auditURL),
 	}
 
 	return cfg, nil
