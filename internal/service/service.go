@@ -49,7 +49,7 @@ func Serve(cfg config.Config) error {
 }
 
 func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents {
-	sugar.Infow("Starting server with config", "address", cfg.Addr, "storeInterval", cfg.StoreInterval, "fileStorage", cfg.FileStorage, "restore", cfg.Restore, "addressDB", cfg.AddrDB)
+	sugar.Infow("Starting server with config", "address", cfg.Addr, "storeInterval", cfg.StoreInterval, "fileStorage", cfg.FileStorage, "restore", cfg.Restore, "addressDB", cfg.AddrDB, "hash key", cfg.Key)
 
 	var storage repository.Storage
 	var dbConn *sql.DB
@@ -76,7 +76,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg.AddrDB)
+	router := handler.NewRouter(storage, sugar, cfg)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,

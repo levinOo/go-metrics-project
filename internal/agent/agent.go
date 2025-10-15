@@ -3,6 +3,9 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -20,50 +24,79 @@ import (
 
 type Config struct {
 	Addr         string `env:"ADDRESS"`
+	Key          string `env:"KEY"`
 	PollInterval int    `env:"POLL_INTERVAL"`
 	ReqInterval  int    `env:"REPORT_INTERVAL"`
+	RateLimit    int    `env:"RATE_LIMIT"`
 }
 
-func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics) error {
+func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int) error {
 	metrics := m.ValuesAllTyped()
 	var metricsList []models.Metrics
 
-	for name, metric := range metrics {
-		metricModel := models.Metrics{
-			ID:    name,
-			MType: metric.Type(),
-		}
-
-		var err error
-		switch metric.Type() {
-		case "gauge":
-			metricModel.Value = new(float64)
-			*metricModel.Value, err = strconv.ParseFloat(metric.String(), 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse gauge value for %s: %w", name, err)
+	inputCh := make(chan models.Metrics)
+	errCh := make(chan error)
+	go func() {
+		defer close(inputCh)
+		for name, metric := range metrics {
+			inputCh <- models.Metrics{
+				ID:    name,
+				MType: metric.Type(),
 			}
-		case "counter":
-			metricModel.Delta = new(int64)
-			*metricModel.Delta, err = strconv.ParseInt(metric.String(), 10, 64)
-			if err != nil {
-				return fmt.Errorf("failed to parse counter value for %s: %w", name, err)
-			}
-		default:
-			return fmt.Errorf("unknown metric type: %s for metric %s", metric.Type(), name)
 		}
+	}()
 
-		metricsList = append(metricsList, metricModel)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for w := 1; w <= rateLimit; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for metric := range inputCh {
+				var err error
+				switch metric.MType {
+				case "gauge":
+					metric.Value = new(float64)
+					*metric.Value, err = strconv.ParseFloat(metrics[metric.ID].String(), 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse gauge value for %s: %w", metric.ID, err)
+						return
+					}
+				case "counter":
+					metric.Delta = new(int64)
+					*metric.Delta, err = strconv.ParseInt(metrics[metric.ID].String(), 10, 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse counter value for %s: %w", metric.ID, err)
+						return
+					}
+				default:
+					errCh <- fmt.Errorf("unknown metric type: %s for metric %s", metric.MType, metric.ID)
+					return
+				}
+
+				mu.Lock()
+				metricsList = append(metricsList, metric)
+				mu.Unlock()
+			}
+		}()
 	}
 
-	if len(metricsList) == 0 {
-		log.Println("No metrics to send, skipping batch")
-		return nil
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
 	}
 
-	return sendMetricsBatch(metricsList, endpoint)
+	return sendMetricsBatch(metricsList, endpoint, key)
 }
 
-func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
+func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) error {
 	url, err := url.JoinPath(endpoint, "updates")
 	if err != nil {
 		return fmt.Errorf("failed to join URL path: %w", err)
@@ -72,6 +105,11 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metrics: %w", err)
+	}
+
+	var hashString string
+	if key != "" {
+		hashString = calculateSHA256Hash(data, key)
 	}
 
 	buffer, err := CompressData(data)
@@ -97,6 +135,10 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string) error {
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
 
+	if hashString != "" {
+		req.Header.Set("HashSHA256", hashString)
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch request: %w", err)
@@ -119,6 +161,13 @@ func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) 
 	}
 
 	return delays[indx]
+}
+
+func calculateSHA256Hash(data []byte, key string) string {
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	hash := h.Sum(nil)
+	return hex.EncodeToString(hash)
 }
 
 func CompressData(data []byte) ([]byte, error) {
@@ -144,8 +193,10 @@ func StartAgent() <-chan error {
 	errCh := make(chan error)
 
 	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "Адрес сервера")
+	flag.StringVar(&cfg.Key, "k", "", "Ключ шифрования")
 	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
 	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
+	flag.IntVar(&cfg.RateLimit, "l", 1, "Значение Rate Limit")
 	flag.Parse()
 
 	err := env.Parse(&cfg)
@@ -157,6 +208,8 @@ func StartAgent() <-chan error {
 	m := store.NewMetricsStorage()
 	endpoint := "http://" + cfg.Addr
 
+	semaphore := make(chan struct{}, cfg.RateLimit)
+
 	go func() {
 		pollTicker := time.NewTicker(time.Second * time.Duration((cfg.PollInterval)))
 		reqTicker := time.NewTicker(time.Second * time.Duration((cfg.ReqInterval)))
@@ -164,14 +217,21 @@ func StartAgent() <-chan error {
 		for {
 			select {
 			case <-pollTicker.C:
-				m.CollectMetrics()
+				go func() {
+					m.CollectMetrics()
+				}()
 
 			case <-reqTicker.C:
-				err := SendAllMetricsBatch(&http.Client{}, endpoint, *m)
+				go func() {
+					semaphore <- struct{}{}
+					defer func() { <-semaphore }()
 
-				if err != nil {
-					log.Printf("Final sending metrics error: %v", err)
-				}
+					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit)
+
+					if err != nil {
+						log.Printf("Final sending metrics error: %v", err)
+					}
+				}()
 			}
 		}
 	}()
