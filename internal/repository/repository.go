@@ -24,7 +24,7 @@ type Storage interface {
 	GetCounter(name string) (Counter, error)
 	GetAll() ([]models.Metrics, error)
 	Ping(ctx context.Context) error
-	InsertMetricsBatch([]models.Metrics) error
+	InsertMetricsBatch(models.ListMetrics) error
 }
 
 // --------------------- DBStorage ---------------------
@@ -71,8 +71,8 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 	return Counter(val), err
 }
 
-func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	if len(metrics) == 0 {
+func (d *DBStorage) InsertMetricsBatch(metrics models.ListMetrics) error {
+	if len(metrics.List) == 0 {
 		return nil
 	}
 
@@ -83,7 +83,7 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	}
 
 	tmp := make(map[string]batchItem)
-	for _, metric := range metrics {
+	for _, metric := range metrics.List {
 		if metric.ID == "" || metric.MType == "" {
 			continue
 		}
@@ -253,8 +253,8 @@ func (m *MemStorage) GetCounter(name string) (Counter, error) {
 	return val, nil
 }
 
-func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	for _, metric := range metrics {
+func (m *MemStorage) InsertMetricsBatch(metrics models.ListMetrics) error {
+	for _, metric := range metrics.List {
 		switch metric.MType {
 		case "gauge":
 			err := m.SetGauge(metric.ID, Gauge(*metric.Value))
