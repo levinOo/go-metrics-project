@@ -7,14 +7,16 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/config"
@@ -24,7 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config) *chi.Mux {
+func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config, json jsoniter.API) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(LoggerMiddleware(sugar))
@@ -34,18 +36,18 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", GetListHandler(storage))
 	r.Get("/ping", PingHandler(storage))
 
-	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key))
-	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key))
+	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL, json))
+	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL, json))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", UpdateJSONHandler(storage, cfg.Key))
+		r.Post("/", UpdateJSONHandler(storage, cfg.Key, json))
 		r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage, sugar))
 	})
 
-	r.Post("/value/", GetJSONHandler(storage, cfg.Key))
+	r.Post("/value/", GetJSONHandler(storage, cfg.Key, json))
 	r.Route("/value", func(r chi.Router) {
 		r.Get("/{typeMetric}/{metric}", GetValueHandler(storage))
-		r.Post("/", GetJSONHandler(storage, cfg.Key))
+		r.Post("/", GetJSONHandler(storage, cfg.Key, json))
 	})
 
 	return r
@@ -169,9 +171,9 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	}
 }
 
-func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFunc {
+func UpdatesValuesHandler(storage repository.Storage, key, path, url string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metrics []models.Metrics
+		var metrics models.ListMetrics
 
 		err := json.NewDecoder(r.Body).Decode(&metrics)
 		if err != nil {
@@ -185,6 +187,12 @@ func UpdatesValuesHandler(storage repository.Storage, key string) http.HandlerFu
 			http.Error(rw, "internal server error", http.StatusInternalServerError)
 			return
 		}
+
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		metrics.NewAuditEvent(path, url, ip, json)
 
 		response := map[string]string{"status": "ok"}
 		data, err := json.Marshal(response)
@@ -261,7 +269,7 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 	}
 }
 
-func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
+func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 
@@ -322,7 +330,7 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 	}
 }
 
-func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
+func GetJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
 

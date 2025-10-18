@@ -3,13 +3,15 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/config/db"
@@ -23,6 +25,8 @@ import (
 
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 )
+
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type ServerComponents struct {
 	server *http.Server
@@ -76,7 +80,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg)
+	router := handler.NewRouter(storage, sugar, cfg, json)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -151,6 +155,14 @@ func runServerWithGracefulShutdown(components *ServerComponents, saver *Periodic
 	storage := components.store
 	sugar := components.logger
 
+	go func() {
+		pprofAddr := "localhost:6060"
+		sugar.Infow("pprof server started", "address", pprofAddr)
+		if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+			sugar.Errorw("pprof server error", "error", err)
+		}
+	}()
+
 	serverErr := make(chan error, 1)
 
 	go func() {
@@ -208,7 +220,7 @@ func gracefulShutdown(cfg config.Config, sugar *zap.SugaredLogger, store reposit
 	return nil
 }
 
-func saveToFile(store repository.Storage, fileName string, sugar *zap.SugaredLogger) error {
+func saveToFile(store repository.Storage, fileName string, sugar *zap.SugaredLogger) error { // test
 	if fileName == "" {
 		sugar.Debugw("Save skipped - no filename specified")
 		return nil
@@ -235,7 +247,7 @@ func saveToFile(store repository.Storage, fileName string, sugar *zap.SugaredLog
 	return nil
 }
 
-func loadFromFile(store repository.Storage, fileName string, sugar *zap.SugaredLogger) error {
+func loadFromFile(store repository.Storage, fileName string, sugar *zap.SugaredLogger) error { // test
 	if fileName == "" {
 		return nil
 	}
