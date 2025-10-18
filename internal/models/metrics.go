@@ -2,11 +2,12 @@ package models
 
 import (
 	"bytes"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
 )
 
 const (
@@ -14,11 +15,6 @@ const (
 	Gauge   = "gauge"
 )
 
-// NOTE: Не усложняем пример, вводя иерархическую вложенность структур.
-// Органичиваясь плоской моделью.
-// Delta и Value объявлены через указатели,
-// что бы отличать значение "0", от не заданного значения
-// и соответственно не кодировать в структуру.
 type ListMetrics struct {
 	List []Metrics
 }
@@ -37,6 +33,21 @@ type Data struct {
 	IP          string   `json:"ip_address"`
 }
 
+type Observer interface {
+	RegisterClient(Consumer)
+	RemoveClient()
+	NotifyClient()
+}
+
+type Consumer interface {
+	Update(data Data)
+}
+
+type Auditer struct {
+	clients []Consumer
+	message Data
+}
+
 func (a *Auditer) RegisterClient(o Consumer) {
 	a.clients = append(a.clients, o)
 }
@@ -51,19 +62,16 @@ func (a *Auditer) NotifyClient() {
 	}
 }
 
-type Observer interface {
-	RegisterClient()
-	RemoveClient()
-	NotifyClient()
+type FileAuditer struct {
+	path string
+	json jsoniter.API
 }
 
-type Consumer interface {
-	Update(data Data)
-}
-
-type Auditer struct {
-	clients []Consumer
-	message Data
+func NewFileAuditer(path string, json jsoniter.API) *FileAuditer {
+	return &FileAuditer{
+		path: path,
+		json: json,
+	}
 }
 
 func (a *FileAuditer) Update(data Data) {
@@ -74,14 +82,14 @@ func (a *FileAuditer) Update(data Data) {
 	var events []Data
 	fileData, err := os.ReadFile(a.path)
 	if err == nil && len(fileData) > 0 {
-		json.Unmarshal(fileData, &events)
+		if err := a.json.Unmarshal(fileData, &events); err != nil {
+			log.Printf("json.Unmarshal error: %v", err)
+		}
 	}
 
-	// Добавляем новую запись
 	events = append(events, data)
 
-	// Сохраняем как массив
-	jsonData, err := json.MarshalIndent(events, "", "  ")
+	jsonData, err := a.json.MarshalIndent(events, "", "  ")
 	if err != nil {
 		log.Printf("json.MarshalIndent error: %v", err)
 		return
@@ -93,8 +101,16 @@ func (a *FileAuditer) Update(data Data) {
 	}
 }
 
-type FileAuditer struct {
-	path string
+type URLAuditer struct {
+	url  string
+	json jsoniter.API
+}
+
+func NewURLAuditer(url string, json jsoniter.API) *URLAuditer {
+	return &URLAuditer{
+		url:  url,
+		json: json,
+	}
 }
 
 func (a *URLAuditer) Update(data Data) {
@@ -102,7 +118,7 @@ func (a *URLAuditer) Update(data Data) {
 		return
 	}
 
-	jsonData, err := json.MarshalIndent(data, "", "  ")
+	jsonData, err := a.json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		log.Printf("json.marshal error: %v", err)
 		return
@@ -113,23 +129,19 @@ func (a *URLAuditer) Update(data Data) {
 		log.Printf("HTTP POST request error: %v", err)
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 }
 
-type URLAuditer struct {
-	url string
-}
-
-func (l *ListMetrics) NewAuditEvent(path, url, ip string) {
+func (l *ListMetrics) NewAuditEvent(path, url, ip string, json jsoniter.API) {
 	ts := time.Now().Unix()
 
-	fileAuditer := &FileAuditer{path: path}
-	urlAuditter := &URLAuditer{url: url}
+	fileAuditer := NewFileAuditer(path, json)
+	urlAuditer := NewURLAuditer(url, json)
 	data := &Data{TS: ts, IP: ip}
 
 	auditer := &Auditer{}
 	auditer.RegisterClient(fileAuditer)
-	auditer.RegisterClient(urlAuditter)
+	auditer.RegisterClient(urlAuditer)
 
 	for _, name := range l.List {
 		data.MetricNames = append(data.MetricNames, name.ID)
@@ -137,5 +149,4 @@ func (l *ListMetrics) NewAuditEvent(path, url, ip string) {
 
 	auditer.message = *data
 	auditer.NotifyClient()
-
 }

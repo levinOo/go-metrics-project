@@ -32,3 +32,5 @@ vendor/
 cmd/server/*.json
 cmd/server/storage.json
 *.json
+
+*/profiles

@@ -33,7 +33,7 @@ type DBStorage struct {
 	db *sql.DB
 }
 
-func NewDBStorage(db *sql.DB) *DBStorage {
+func NewDBStorage(db *sql.DB) Storage {
 	return &DBStorage{db: db}
 }
 
@@ -211,7 +211,7 @@ type MemStorage struct {
 	Counters map[string]Counter
 }
 
-func NewMemStorage() *MemStorage {
+func NewMemStorage() Storage {
 	return &MemStorage{
 		mu:       &sync.Mutex{},
 		Gauges:   make(map[string]Gauge),
