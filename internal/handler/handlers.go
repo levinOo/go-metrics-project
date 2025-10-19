@@ -1,3 +1,6 @@
+// Package handler предоставляет HTTP-обработчики и middleware для сервера метрик.
+// Включает роутинг запросов, обработку JSON/text форматов, сжатие данных,
+// проверку HMAC-подписей и логирование запросов.
 package handler
 
 import (
@@ -19,6 +22,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 
 	"github.com/go-chi/chi"
+	"github.com/levinOo/go-metrics-project/internal/audit"
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
@@ -26,6 +30,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// NewRouter создает и настраивает HTTP-роутер с использованием chi.
+// Регистрирует все обработчики для работы с метриками и применяет middleware.
+//
+// Зарегистрированные эндпоинты:
+//
+//	GET  /           - получить список всех метрик (HTML или text)
+//	GET  /ping       - проверить доступность базы данных
+//	POST /updates    - пакетное обновление метрик (JSON)
+//	POST /update/    - обновить метрику (JSON)
+//	POST /update/{typeMetric}/{metric}/{value} - обновить метрику (URL params)
+//	POST /value/     - получить значение метрики (JSON)
+//	GET  /value/{typeMetric}/{metric} - получить значение метрики (URL params)
+//
+// Применяемые middleware (в порядке выполнения):
+//  1. LoggerMiddleware - логирование всех запросов
+//  2. DecompressMiddleware - автоматическая декомпрессия gzip
+//  3. DecryptMiddleware - проверка HMAC-подписей
 func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config, json jsoniter.API) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -53,6 +74,11 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	return r
 }
 
+// LoggerMiddleware создает middleware для логирования HTTP-запросов.
+// Записывает URI, метод, длительность выполнения, статус ответа и размер тела ответа.
+//
+// Использует zap.SugaredLogger для структурированного логирования.
+// Измеряет время выполнения запроса от начала до завершения.
 func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -82,6 +108,14 @@ func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handle
 	}
 }
 
+// DecompressMiddleware создает middleware для автоматической декомпрессии gzip-сжатых запросов.
+// Проверяет заголовок Content-Encoding и при значении "gzip" распаковывает тело запроса.
+//
+// После декомпрессии:
+//   - Заменяет r.Body на распакованные данные
+//   - Обновляет r.ContentLength для корректной обработки
+//
+// Возвращает HTTP 400 при ошибках декомпрессии.
 func DecompressMiddleware() func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -108,6 +142,20 @@ func DecompressMiddleware() func(h http.Handler) http.Handler {
 	}
 }
 
+// DecryptMiddleware создает middleware для проверки HMAC SHA256 подписей запросов.
+// Проверяет заголовки "Hash" или "HashSHA256" и сравнивает с вычисленной подписью.
+//
+// Алгоритм проверки:
+//  1. Извлекает хеш из заголовка запроса
+//  2. Вычисляет HMAC SHA256 от тела запроса с использованием секретного ключа
+//  3. Сравнивает полученную и ожидаемую подписи
+//
+// Параметры:
+//
+//	key: секретный ключ для HMAC. Если пустой, проверка отключена.
+//
+// Пропускает запросы без подписи или с подписью "none".
+// Возвращает HTTP 400 при несовпадении подписей или некорректном формате.
 func DecryptMiddleware(key string) func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -155,6 +203,13 @@ func DecryptMiddleware(key string) func(h http.Handler) http.Handler {
 	}
 }
 
+// PingHandler возвращает обработчик для проверки доступности базы данных.
+// Выполняет ping к хранилищу с таймаутом 2 секунды.
+//
+// Ответы:
+//
+//	200 OK - база данных доступна
+//	500 Internal Server Error - нет соединения с базой данных
 func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -171,6 +226,25 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	}
 }
 
+// UpdatesValuesHandler возвращает обработчик для пакетного обновления метрик.
+// Принимает массив метрик в формате JSON и обновляет их одной транзакцией.
+//
+// Формат запроса:
+//
+//	POST /updates
+//	Content-Type: application/json
+//	Body: [{"id":"metric1","type":"gauge","value":42.5}, ...]
+//
+// Дополнительные функции:
+//   - Создает событие аудита с IP-адресом клиента
+//   - Добавляет HMAC-подпись в ответ, если настроен ключ
+//   - Поддерживает ответы в JSON или HTML формате
+//
+// Ответы:
+//
+//	200 OK - метрики успешно обновлены
+//	400 Bad Request - некорректный формат JSON
+//	500 Internal Server Error - ошибка при сохранении
 func UpdatesValuesHandler(storage repository.Storage, key, path, url string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metrics models.ListMetrics
@@ -192,7 +266,7 @@ func UpdatesValuesHandler(storage repository.Storage, key, path, url string, jso
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		metrics.NewAuditEvent(path, url, ip, json)
+		audit.NewAuditEvent(metrics, path, url, ip, json)
 
 		response := map[string]string{"status": "ok"}
 		data, err := json.Marshal(response)
@@ -228,6 +302,24 @@ func UpdatesValuesHandler(storage repository.Storage, key, path, url string, jso
 	}
 }
 
+// UpdateValueHandler возвращает обработчик для обновления метрики через URL параметры.
+// Извлекает тип, имя и значение метрики из пути запроса.
+//
+// Формат запроса:
+//
+//	POST /update/{typeMetric}/{metric}/{value}
+//	Где: typeMetric = "gauge" или "counter"
+//
+// Примеры:
+//
+//	POST /update/gauge/temperature/23.5
+//	POST /update/counter/requests/100
+//
+// Ответы:
+//
+//	200 OK - метрика успешно обновлена
+//	400 Bad Request - некорректный тип или значение
+//	404 Not Found - отсутствует имя метрики
 func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		nameMetric := chi.URLParam(r, "metric")
@@ -269,6 +361,21 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 	}
 }
 
+// UpdateJSONHandler возвращает обработчик для обновления одной метрики в формате JSON.
+// Принимает объект метрики и обновляет её значение в хранилище.
+//
+// Формат запроса:
+//
+//	POST /update/
+//	Content-Type: application/json
+//	Body: {"id":"cpu","type":"gauge","value":45.5}
+//
+// Для counter используется поле "delta" вместо "value":
+//
+//	Body: {"id":"requests","type":"counter","delta":100}
+//
+// Добавляет HMAC-подпись в ответ, если настроен ключ.
+// Поддерживает content negotiation (JSON/HTML).
 func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
@@ -330,6 +437,28 @@ func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API
 	}
 }
 
+// GetJSONHandler возвращает обработчик для получения значения метрики в формате JSON.
+// Принимает запрос с идентификатором и типом метрики, возвращает её текущее значение.
+//
+// Формат запроса:
+//
+//	POST /value/
+//	Content-Type: application/json
+//	Body: {"id":"cpu","type":"gauge"}
+//
+// Формат ответа:
+//
+//	{"id":"cpu","type":"gauge","value":45.5}
+//
+// Дополнительные функции:
+//   - Добавляет HMAC-подпись в заголовок HashSHA256
+//   - Поддерживает gzip-сжатие ответа (Accept-Encoding: gzip)
+//
+// Ответы:
+//
+//	200 OK - метрика найдена и возвращена
+//	400 Bad Request - некорректный JSON или неизвестный тип
+//	404 Not Found - метрика не найдена
 func GetJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var metric models.Metrics
@@ -402,6 +531,23 @@ func GetJSONHandler(storage repository.Storage, key string, json jsoniter.API) h
 	}
 }
 
+// GetValueHandler возвращает обработчик для получения значения метрики через URL параметры.
+// Извлекает тип и имя метрики из пути, возвращает значение в текстовом формате.
+//
+// Формат запроса:
+//
+//	GET /value/{typeMetric}/{metric}
+//
+// Примеры:
+//
+//	GET /value/gauge/temperature -> "23.5"
+//	GET /value/counter/requests -> "100"
+//
+// Ответы:
+//
+//	200 OK - возвращает значение метрики в виде текста
+//	400 Bad Request - неизвестный тип метрики
+//	404 Not Found - метрика не найдена
 func GetValueHandler(storage repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		nameMetric := chi.URLParam(r, "metric")
@@ -438,6 +584,23 @@ func GetValueHandler(storage repository.Storage) http.HandlerFunc {
 	}
 }
 
+// GetListHandler возвращает обработчик для получения списка всех метрик.
+// Форматирует вывод в зависимости от заголовка Accept (HTML или plain text).
+//
+// Формат запроса:
+//
+//	GET /
+//	Accept: text/html (для HTML) или отсутствует (для plain text)
+//
+// HTML формат:
+//
+//	Возвращает структурированный HTML с разделами "Gauges" и "Counters"
+//
+// Plain text формат:
+//
+//	Каждая метрика на отдельной строке: "name: value"
+//
+// Поддерживает gzip-сжатие ответа при наличии Accept-Encoding: gzip.
 func GetListHandler(storage repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder

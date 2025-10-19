@@ -1,152 +1,52 @@
+// Package models содержит структуры данных, описывающие основные сущности предметной области.
+// Пакет не содержит бизнес-логику и используется для передачи данных между слоями приложения.
 package models
 
-import (
-	"bytes"
-	"log"
-	"net/http"
-	"os"
-	"time"
-
-	jsoniter "github.com/json-iterator/go"
-)
-
+// Константы типов метрик
 const (
+	// Counter представляет метрику-счётчик, значение которой только увеличивается.
 	Counter = "counter"
-	Gauge   = "gauge"
+
+	// Gauge представляет метрику-измеритель, значение которой может изменяться произвольно.
+	Gauge = "gauge"
 )
 
+// ListMetrics содержит список метрик для пакетной обработки.
 type ListMetrics struct {
+	// List содержит массив метрик для одновременной отправки или обработки.
 	List []Metrics
 }
 
+// Metrics представляет отдельную метрику в системе мониторинга.
+// Поддерживает два типа метрик: gauge (с полем Value) и counter (с полем Delta).
 type Metrics struct {
-	ID    string   `json:"id"`
-	MType string   `json:"type"`
-	Delta *int64   `json:"delta,omitempty"`
+	// ID содержит уникальное имя метрики.
+	ID string `json:"id"`
+
+	// MType определяет тип метрики: "gauge" или "counter".
+	MType string `json:"type"`
+
+	// Delta содержит значение для counter-метрик (изменение счётчика).
+	// Используется только когда MType = "counter".
+	Delta *int64 `json:"delta,omitempty"`
+
+	// Value содержит значение для gauge-метрик (текущее измерение).
+	// Используется только когда MType = "gauge".
 	Value *float64 `json:"value,omitempty"`
-	Hash  string   `json:"hash,omitempty"`
+
+	// Hash содержит HMAC SHA256 подпись метрики для проверки целостности.
+	Hash string `json:"hash,omitempty"`
 }
 
+// Data представляет событие аудита с информацией об обновлении метрик.
+// Используется для логирования операций с метриками.
 type Data struct {
-	TS          int64    `json:"ts"`
+	// TS содержит временную метку события в формате Unix timestamp.
+	TS int64 `json:"ts"`
+
+	// MetricNames содержит список имён метрик, участвовавших в операции.
 	MetricNames []string `json:"metrics"`
-	IP          string   `json:"ip_address"`
-}
 
-type Observer interface {
-	RegisterClient(Consumer)
-	RemoveClient()
-	NotifyClient()
-}
-
-type Consumer interface {
-	Update(data Data)
-}
-
-type Auditer struct {
-	clients []Consumer
-	message Data
-}
-
-func (a *Auditer) RegisterClient(o Consumer) {
-	a.clients = append(a.clients, o)
-}
-
-func (a *Auditer) RemoveClient() {
-	// логика удаления Client
-}
-
-func (a *Auditer) NotifyClient() {
-	for _, client := range a.clients {
-		client.Update(a.message)
-	}
-}
-
-type FileAuditer struct {
-	path string
-	json jsoniter.API
-}
-
-func NewFileAuditer(path string, json jsoniter.API) *FileAuditer {
-	return &FileAuditer{
-		path: path,
-		json: json,
-	}
-}
-
-func (a *FileAuditer) Update(data Data) {
-	if a.path == "" {
-		return
-	}
-
-	var events []Data
-	fileData, err := os.ReadFile(a.path)
-	if err == nil && len(fileData) > 0 {
-		if err := a.json.Unmarshal(fileData, &events); err != nil {
-			log.Printf("json.Unmarshal error: %v", err)
-		}
-	}
-
-	events = append(events, data)
-
-	jsonData, err := a.json.MarshalIndent(events, "", "  ")
-	if err != nil {
-		log.Printf("json.MarshalIndent error: %v", err)
-		return
-	}
-
-	err = os.WriteFile(a.path, jsonData, 0644)
-	if err != nil {
-		log.Printf("write file error: %v", err)
-	}
-}
-
-type URLAuditer struct {
-	url  string
-	json jsoniter.API
-}
-
-func NewURLAuditer(url string, json jsoniter.API) *URLAuditer {
-	return &URLAuditer{
-		url:  url,
-		json: json,
-	}
-}
-
-func (a *URLAuditer) Update(data Data) {
-	if a.url == "" {
-		return
-	}
-
-	jsonData, err := a.json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		log.Printf("json.marshal error: %v", err)
-		return
-	}
-
-	resp, err := http.Post(a.url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Printf("HTTP POST request error: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-}
-
-func (l *ListMetrics) NewAuditEvent(path, url, ip string, json jsoniter.API) {
-	ts := time.Now().Unix()
-
-	fileAuditer := NewFileAuditer(path, json)
-	urlAuditer := NewURLAuditer(url, json)
-	data := &Data{TS: ts, IP: ip}
-
-	auditer := &Auditer{}
-	auditer.RegisterClient(fileAuditer)
-	auditer.RegisterClient(urlAuditer)
-
-	for _, name := range l.List {
-		data.MetricNames = append(data.MetricNames, name.ID)
-	}
-
-	auditer.message = *data
-	auditer.NotifyClient()
+	// IP содержит IP-адрес клиента, выполнившего операцию.
+	IP string `json:"ip_address"`
 }
