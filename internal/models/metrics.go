@@ -50,3 +50,7 @@ type Data struct {
 	// IP содержит IP-адрес клиента, выполнившего операцию.
 	IP string `json:"ip_address"`
 }
+
+type DataList struct {
+	Events []Data `json:"events"`
+}

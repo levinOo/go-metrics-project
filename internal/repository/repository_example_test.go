@@ -95,7 +95,7 @@ func Example_getAllMetrics() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("Total metrics: %d\n", len(metrics))
+	fmt.Printf("Total metrics: %d\n", len(metrics.List))
 	// Output: Total metrics: 2
 }
 
@@ -208,7 +208,7 @@ func Example_mixedMetricTypes() {
 
 	gaugeCount := 0
 	counterCount := 0
-	for _, m := range all {
+	for _, m := range all.List {
 		if m.MType == "gauge" {
 			gaugeCount++
 		} else if m.MType == "counter" {

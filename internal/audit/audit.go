@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/levinOo/go-metrics-project/internal/models"
+	"github.com/mailru/easyjson"
 )
 
 // Observer определяет интерфейс наблюдателя для системы аудита.
@@ -69,7 +69,6 @@ func (a *Auditer) SetMessage(data models.Data) {
 // Реализует интерфейс Consumer для обработки событий через файловую систему.
 type FileAuditer struct {
 	path string
-	json jsoniter.API
 }
 
 // NewFileAuditer создаёт новый экземпляр FileAuditer для записи в указанный файл.
@@ -77,10 +76,9 @@ type FileAuditer struct {
 //
 //	path: путь к файлу для записи событий аудита
 //	json: JSON-сериализатор для кодирования данных
-func NewFileAuditer(path string, json jsoniter.API) *FileAuditer {
+func NewFileAuditer(path string) *FileAuditer {
 	return &FileAuditer{
 		path: path,
-		json: json,
 	}
 }
 
@@ -92,33 +90,42 @@ func (a *FileAuditer) Update(data models.Data) {
 		return
 	}
 
-	var events []models.Data
+	var dataList models.DataList
 	fileData, err := os.ReadFile(a.path)
-	if err == nil && len(fileData) > 0 {
-		if err := a.json.Unmarshal(fileData, &events); err != nil {
-			log.Printf("json.Unmarshal error: %v", err)
-		}
+	if err != nil {
+		log.Printf("failed to read file %s: %v", a.path, err)
+		return
 	}
 
-	events = append(events, data)
+	if len(fileData) == 0 {
+		log.Printf("file %s is empty", a.path)
+		return
+	}
 
-	jsonData, err := a.json.MarshalIndent(events, "", "  ")
+	if err := easyjson.Unmarshal(fileData, &dataList); err != nil {
+		log.Printf("json.Unmarshal error: %v", err)
+		return
+	}
+
+	dataList.Events = append(dataList.Events, data)
+
+	jsonData, err := easyjson.Marshal(&dataList)
 	if err != nil {
-		log.Printf("json.MarshalIndent error: %v", err)
+		log.Printf("json.Marshal error: %v", err)
 		return
 	}
 
 	err = os.WriteFile(a.path, jsonData, 0644)
 	if err != nil {
 		log.Printf("write file error: %v", err)
+		return
 	}
 }
 
 // URLAuditer отправляет события аудита на внешний HTTP endpoint.
 // Реализует интерфейс Consumer для обработки событий через HTTP.
 type URLAuditer struct {
-	url  string
-	json jsoniter.API
+	url string
 }
 
 // NewURLAuditer создаёт новый экземпляр URLAuditer для отправки на указанный URL.
@@ -126,10 +133,9 @@ type URLAuditer struct {
 //
 //	url: HTTP endpoint для отправки событий
 //	json: JSON-сериализатор для кодирования данных
-func NewURLAuditer(url string, json jsoniter.API) *URLAuditer {
+func NewURLAuditer(url string) *URLAuditer {
 	return &URLAuditer{
-		url:  url,
-		json: json,
+		url: url,
 	}
 }
 
@@ -141,7 +147,7 @@ func (a *URLAuditer) Update(data models.Data) {
 		return
 	}
 
-	jsonData, err := a.json.MarshalIndent(data, "", "  ")
+	jsonData, err := easyjson.Marshal(data)
 	if err != nil {
 		log.Printf("json.marshal error: %v", err)
 		return
@@ -166,11 +172,11 @@ func (a *URLAuditer) Update(data models.Data) {
 //	url: URL для отправки событий (пустая строка для отключения)
 //	ip: IP-адрес клиента, выполнившего операцию
 //	json: JSON-сериализатор
-func NewAuditEvent(metrics models.ListMetrics, path, url, ip string, json jsoniter.API) {
+func NewAuditEvent(metrics models.ListMetrics, path, url, ip string) {
 	ts := time.Now().Unix()
 
-	fileAuditer := NewFileAuditer(path, json)
-	urlAuditer := NewURLAuditer(url, json)
+	fileAuditer := NewFileAuditer(path)
+	urlAuditer := NewURLAuditer(url)
 
 	data := models.Data{
 		TS:          ts,

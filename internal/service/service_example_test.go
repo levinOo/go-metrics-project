@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/handler"
 	"github.com/levinOo/go-metrics-project/internal/logger"
@@ -17,8 +16,6 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"github.com/levinOo/go-metrics-project/internal/service"
 )
-
-var jsonAPI = jsoniter.ConfigCompatibleWithStandardLibrary
 
 // Example_updateGaugeMetric демонстрирует обновление gauge-метрики через API.
 func Example_updateGaugeMetric() {
@@ -34,7 +31,7 @@ func Example_updateGaugeMetric() {
 	}
 
 	// Создаем тестовый сервер
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
@@ -71,7 +68,7 @@ func Example_updateCounterMetric() {
 		Key:           "",
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
@@ -109,7 +106,7 @@ func Example_getMetricValue() {
 	// Предварительно добавляем метрику
 	storage.SetGauge("Temperature", 23.5)
 
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
@@ -145,7 +142,7 @@ func Example_batchUpdateMetrics() {
 		Key:           "",
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
@@ -216,7 +213,7 @@ func Example_getAllMetrics() {
 	storage.SetGauge("Memory", 78.2)
 	storage.SetCounter("Requests", 100)
 
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
@@ -243,7 +240,7 @@ func Example_healthCheck() {
 		Key:           "",
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg, jsonAPI)
+	router := handler.NewRouter(storage, sugar, cfg)
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 

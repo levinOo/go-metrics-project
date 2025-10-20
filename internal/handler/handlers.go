@@ -19,8 +19,6 @@ import (
 	"strings"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
-
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/audit"
 	"github.com/levinOo/go-metrics-project/internal/config"
@@ -47,7 +45,7 @@ import (
 //  1. LoggerMiddleware - логирование всех запросов
 //  2. DecompressMiddleware - автоматическая декомпрессия gzip
 //  3. DecryptMiddleware - проверка HMAC-подписей
-func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config, json jsoniter.API) *chi.Mux {
+func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(LoggerMiddleware(sugar))
@@ -57,18 +55,18 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Get("/", GetListHandler(storage))
 	r.Get("/ping", PingHandler(storage))
 
-	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL, json))
-	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL, json))
+	r.Post("/updates", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL))
+	r.Post("/updates/", UpdatesValuesHandler(storage, cfg.Key, cfg.AuditFile, cfg.AuditURL))
 
 	r.Route("/update", func(r chi.Router) {
-		r.Post("/", UpdateJSONHandler(storage, cfg.Key, json))
+		r.Post("/", UpdateJSONHandler(storage, cfg.Key))
 		r.Post("/{typeMetric}/{metric}/{value}", UpdateValueHandler(storage, sugar))
 	})
 
-	r.Post("/value/", GetJSONHandler(storage, cfg.Key, json))
+	r.Post("/value/", GetJSONHandler(storage, cfg.Key))
 	r.Route("/value", func(r chi.Router) {
 		r.Get("/{typeMetric}/{metric}", GetValueHandler(storage))
-		r.Post("/", GetJSONHandler(storage, cfg.Key, json))
+		r.Post("/", GetJSONHandler(storage, cfg.Key))
 	})
 
 	return r
@@ -245,16 +243,21 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 //	200 OK - метрики успешно обновлены
 //	400 Bad Request - некорректный формат JSON
 //	500 Internal Server Error - ошибка при сохранении
-func UpdatesValuesHandler(storage repository.Storage, key, path, url string, json jsoniter.API) http.HandlerFunc {
+func UpdatesValuesHandler(storage repository.Storage, key, path, url string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metrics models.ListMetrics
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
 
-		err := json.NewDecoder(r.Body).Decode(&metrics)
+		var metrics models.ListMetrics
+		err = metrics.UnmarshalJSON(body)
 		if err != nil {
 			http.Error(rw, "invalid JSON format", http.StatusBadRequest)
 			return
 		}
-		defer r.Body.Close()
 
 		err = storage.InsertMetricsBatch(metrics)
 		if err != nil {
@@ -266,14 +269,9 @@ func UpdatesValuesHandler(storage repository.Storage, key, path, url string, jso
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		audit.NewAuditEvent(metrics, path, url, ip, json)
+		audit.NewAuditEvent(metrics, path, url, ip)
 
-		response := map[string]string{"status": "ok"}
-		data, err := json.Marshal(response)
-		if err != nil {
-			http.Error(rw, "encode error", http.StatusInternalServerError)
-			return
-		}
+		data := []byte(`{"status":"ok"}`)
 
 		if key != "" {
 			mac := hmac.New(sha256.New, []byte(key))
@@ -376,16 +374,21 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 //
 // Добавляет HMAC-подпись в ответ, если настроен ключ.
 // Поддерживает content negotiation (JSON/HTML).
-func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
+func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metric models.Metrics
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
 
-		err := json.NewDecoder(r.Body).Decode(&metric)
+		var metric models.Metrics
+		err = metric.UnmarshalJSON(body)
 		if err != nil {
 			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		defer r.Body.Close()
 
 		switch metric.MType {
 		case "gauge":
@@ -403,12 +406,7 @@ func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API
 			return
 		}
 
-		response := map[string]string{"status": "ok"}
-		data, err := json.Marshal(response)
-		if err != nil {
-			http.Error(rw, "encode error", http.StatusInternalServerError)
-			return
-		}
+		data := []byte(`{"status":"ok"}`)
 
 		if key != "" {
 			mac := hmac.New(sha256.New, []byte(key))
@@ -459,13 +457,19 @@ func UpdateJSONHandler(storage repository.Storage, key string, json jsoniter.API
 //	200 OK - метрика найдена и возвращена
 //	400 Bad Request - некорректный JSON или неизвестный тип
 //	404 Not Found - метрика не найдена
-func GetJSONHandler(storage repository.Storage, key string, json jsoniter.API) http.HandlerFunc {
+func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		var metric models.Metrics
-
-		err := json.NewDecoder(r.Body).Decode(&metric)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(rw, "", http.StatusBadRequest)
+			http.Error(rw, "failed to read body", http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		var metric models.Metrics
+		err = metric.UnmarshalJSON(body)
+		if err != nil {
+			http.Error(rw, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -495,7 +499,7 @@ func GetJSONHandler(storage repository.Storage, key string, json jsoniter.API) h
 			return
 		}
 
-		data, err := json.Marshal(metric)
+		data, err := metric.MarshalJSON()
 		if err != nil {
 			http.Error(rw, "encode error", http.StatusInternalServerError)
 			return
@@ -618,7 +622,7 @@ func GetListHandler(storage repository.Storage) http.HandlerFunc {
 			gaugeCount := 0
 			counterCount := 0
 
-			for _, metric := range metrics {
+			for _, metric := range metrics.List {
 				switch metric.MType {
 				case "gauge":
 					gaugeCount++
@@ -629,7 +633,7 @@ func GetListHandler(storage repository.Storage) http.HandlerFunc {
 
 			if gaugeCount > 0 {
 				sb.WriteString("<h2>Gauges</h2><ul>")
-				for _, metric := range metrics {
+				for _, metric := range metrics.List {
 					if metric.MType == "gauge" && metric.Value != nil {
 						sb.WriteString(fmt.Sprintf("<li>%s: %f</li>", metric.ID, *metric.Value))
 					}
@@ -639,7 +643,7 @@ func GetListHandler(storage repository.Storage) http.HandlerFunc {
 
 			if counterCount > 0 {
 				sb.WriteString("<h2>Counters</h2><ul>")
-				for _, metric := range metrics {
+				for _, metric := range metrics.List {
 					if metric.MType == "counter" && metric.Delta != nil {
 						sb.WriteString(fmt.Sprintf("<li>%s: %d</li>", metric.ID, *metric.Delta))
 					}
@@ -649,7 +653,7 @@ func GetListHandler(storage repository.Storage) http.HandlerFunc {
 
 			sb.WriteString("</body></html>")
 		} else {
-			for _, metric := range metrics {
+			for _, metric := range metrics.List {
 				if metric.MType == "gauge" && metric.Value != nil {
 					sb.WriteString(fmt.Sprintf("%s: %f\n", metric.ID, *metric.Value))
 				} else if metric.MType == "counter" && metric.Delta != nil {

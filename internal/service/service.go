@@ -14,8 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	jsoniter "github.com/json-iterator/go"
-
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/config/db"
 	"github.com/levinOo/go-metrics-project/internal/handler"
@@ -27,8 +25,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
-
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 // ServerComponents содержит все компоненты, необходимые для работы сервера метрик.
 // Включает HTTP-сервер, хранилище данных, логгер и опциональное подключение к базе данных.
@@ -91,7 +87,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		}
 	}
 
-	router := handler.NewRouter(storage, sugar, cfg, json)
+	router := handler.NewRouter(storage, sugar, cfg)
 
 	srv := &http.Server{
 		Addr:    cfg.Addr,
@@ -250,7 +246,7 @@ func saveToFile(store repository.Storage, fileName string, sugar *zap.SugaredLog
 	if err != nil {
 		return fmt.Errorf("failed to get all metrics: %w", err)
 	}
-	sugar.Debugw("Retrieved metrics from storage", "count", len(allMetrics))
+	sugar.Debugw("Retrieved metrics from storage", "count", len(allMetrics.List))
 
 	data, err := serializeMetrics(allMetrics)
 	if err != nil {
@@ -286,7 +282,7 @@ func loadFromFile(store repository.Storage, fileName string, sugar *zap.SugaredL
 	}
 
 	count := 0
-	for _, m := range metrics {
+	for _, m := range metrics.List {
 		switch m.MType {
 		case "gauge":
 			if m.Value != nil {
@@ -333,14 +329,15 @@ func writeFile(fileName string, data []byte) error {
 	return nil
 }
 
-func deserializeMetrics(data []byte, fileName string) ([]models.Metrics, error) {
-	var metrics []models.Metrics
-	if err := json.Unmarshal(data, &metrics); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metrics from %s: %w", fileName, err)
+func deserializeMetrics(data []byte, fileName string) (*models.ListMetrics, error) {
+	var metrics models.ListMetrics
+
+	if err := metrics.UnmarshalJSON(data); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metric from %s: %w", fileName, err)
 	}
-	return metrics, nil
+	return &metrics, nil
 }
 
-func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
-	return json.MarshalIndent(metrics, "", "  ")
+func serializeMetrics(metrics *models.ListMetrics) ([]byte, error) {
+	return metrics.MarshalJSON()
 }
