@@ -22,9 +22,9 @@ type Storage interface {
 	GetGauge(name string) (Gauge, error)
 	SetCounter(name string, value Counter) error
 	GetCounter(name string) (Counter, error)
-	GetAll() ([]models.Metrics, error)
+	GetAll() (*models.ListMetrics, error)
 	Ping(ctx context.Context) error
-	InsertMetricsBatch([]models.Metrics) error
+	InsertMetricsBatch(models.ListMetrics) error
 }
 
 // --------------------- DBStorage ---------------------
@@ -71,8 +71,8 @@ func (d *DBStorage) GetCounter(name string) (Counter, error) {
 	return Counter(val), err
 }
 
-func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	if len(metrics) == 0 {
+func (d *DBStorage) InsertMetricsBatch(metrics models.ListMetrics) error {
+	if len(metrics.List) == 0 {
 		return nil
 	}
 
@@ -83,7 +83,7 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	}
 
 	tmp := make(map[string]batchItem)
-	for _, metric := range metrics {
+	for _, metric := range metrics.List {
 		if metric.ID == "" || metric.MType == "" {
 			continue
 		}
@@ -157,8 +157,8 @@ func (d *DBStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	return nil
 }
 
-func (d *DBStorage) GetAll() ([]models.Metrics, error) {
-	var list []models.Metrics
+func (d *DBStorage) GetAll() (*models.ListMetrics, error) {
+	var list models.ListMetrics
 
 	rows, err := d.db.Query(`SELECT name, type, value, delta FROM metrics`)
 	if err != nil {
@@ -193,10 +193,10 @@ func (d *DBStorage) GetAll() ([]models.Metrics, error) {
 			metric.Delta = &delta.Int64
 		}
 
-		list = append(list, metric)
+		list.List = append(list.List, metric)
 	}
 
-	return list, nil
+	return &list, nil
 }
 
 func (d *DBStorage) Ping(ctx context.Context) error {
@@ -253,8 +253,8 @@ func (m *MemStorage) GetCounter(name string) (Counter, error) {
 	return val, nil
 }
 
-func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
-	for _, metric := range metrics {
+func (m *MemStorage) InsertMetricsBatch(metrics models.ListMetrics) error {
+	for _, metric := range metrics.List {
 		switch metric.MType {
 		case "gauge":
 			err := m.SetGauge(metric.ID, Gauge(*metric.Value))
@@ -274,15 +274,15 @@ func (m *MemStorage) InsertMetricsBatch(metrics []models.Metrics) error {
 	return nil
 }
 
-func (m *MemStorage) GetAll() ([]models.Metrics, error) {
+func (m *MemStorage) GetAll() (*models.ListMetrics, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var list []models.Metrics
+	var list models.ListMetrics
 
 	for name, val := range m.Counters {
 		v := int64(val)
-		list = append(list, models.Metrics{
+		list.List = append(list.List, models.Metrics{
 			ID:    name,
 			MType: "counter",
 			Delta: &v,
@@ -291,14 +291,14 @@ func (m *MemStorage) GetAll() ([]models.Metrics, error) {
 
 	for name, val := range m.Gauges {
 		v := float64(val)
-		list = append(list, models.Metrics{
+		list.List = append(list.List, models.Metrics{
 			ID:    name,
 			MType: "gauge",
 			Value: &v,
 		})
 	}
 
-	return list, nil
+	return &list, nil
 }
 
 func (m *MemStorage) Ping(ctx context.Context) error {

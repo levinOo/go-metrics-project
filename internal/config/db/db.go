@@ -1,3 +1,6 @@
+// Package db предоставляет функциональность для работы с базой данных PostgreSQL.
+// Включает подключение к БД с повторными попытками, проверку ошибок соединения
+// и выполнение миграций схемы базы данных.
 package db
 
 import (
@@ -18,6 +21,16 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// DataBaseConnection устанавливает соединение с базой данных PostgreSQL.
+// Использует драйвер pgx для подключения.
+//
+// Параметры:
+//
+//	cfgAddrDB: строка подключения в формате PostgreSQL DSN
+//	           (например, "postgres://user:password@localhost:5432/dbname?sslmode=disable")
+//
+// Возвращает открытое соединение *sql.DB или ошибку при неудаче.
+// Не выполняет проверку доступности базы данных - только открывает соединение.
 func DataBaseConnection(cfgAddrDB string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", cfgAddrDB)
 	if err != nil {
@@ -27,6 +40,19 @@ func DataBaseConnection(cfgAddrDB string) (*sql.DB, error) {
 	return db, nil
 }
 
+// ConnectDB устанавливает соединение с базой данных с автоматическими повторными попытками.
+// При ошибках подключения выполняет до 3 попыток с экспоненциальными задержками:
+// 1 секунда, 3 секунды, 5 секунд.
+//
+// Повторные попытки выполняются только для ошибок подключения PostgreSQL (класс 08)
+// и системных ошибок соединения (ECONNREFUSED).
+//
+// Параметры:
+//
+//	cfgAddrDB: строка подключения PostgreSQL DSN
+//	sugar: логгер для записи информации о попытках подключения
+//
+// Возвращает установленное соединение или ошибку после всех неудачных попыток.
 func ConnectDB(cfgAddrDB string, sugar *zap.SugaredLogger) (*sql.DB, error) {
 	var dbConn *sql.DB
 	intervals := []time.Duration{1 * time.Second, 3 * time.Second, 5 * time.Second}
@@ -61,6 +87,14 @@ func ConnectDB(cfgAddrDB string, sugar *zap.SugaredLogger) (*sql.DB, error) {
 	return dbConn, nil
 }
 
+// isPostgreSQLConnectionError проверяет, является ли ошибка проблемой соединения с PostgreSQL.
+// Определяет следующие типы ошибок подключения:
+//   - Ошибки PostgreSQL класса 08 (Connection Exception)
+//   - Системная ошибка ECONNREFUSED (соединение отклонено)
+//   - Строковые ошибки, содержащие "connection refused", "dial tcp", "connect:"
+//
+// Возвращает true, если ошибка связана с подключением и имеет смысл повторить попытку.
+// Возвращает false для nil или других типов ошибок.
 func isPostgreSQLConnectionError(err error) bool {
 	if err == nil {
 		return false
@@ -81,6 +115,26 @@ func isPostgreSQLConnectionError(err error) bool {
 		strings.Contains(errStr, "connect:")
 }
 
+// RunMigrations выполняет миграции базы данных из директории migrations/.
+// Использует библиотеку golang-migrate для применения SQL-миграций.
+//
+// Миграции должны находиться в директории "./migrations" относительно рабочей директории.
+// Файлы миграций должны следовать формату: {version}_{name}.up.sql и {version}_{name}.down.sql
+//
+// Параметры:
+//
+//	dbConnString: строка подключения PostgreSQL DSN
+//
+// Возвращает nil при успешном применении миграций или если миграции уже применены.
+// Возвращает ошибку при проблемах с созданием экземпляра migrate или применением миграций.
+//
+// Пример структуры директории migrations:
+//
+//	migrations/
+//	  001_create_metrics_table.up.sql
+//	  001_create_metrics_table.down.sql
+//	  002_add_indexes.up.sql
+//	  002_add_indexes.down.sql
 func RunMigrations(dbConnString string) error {
 	migrationsPath := "file://migrations"
 	m, err := migrate.New(

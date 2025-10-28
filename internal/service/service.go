@@ -1,11 +1,14 @@
+// Package service предоставляет основной функционал сервера для системы сбора метрик.
+// Пакет управляет жизненным циклом HTTP-сервера, периодическим сохранением метрик
+// и корректным завершением работы при получении системных сигналов.
 package service
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,11 +22,12 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/repository"
 	"go.uber.org/zap"
 
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
+// ServerComponents содержит все компоненты, необходимые для работы сервера метрик.
+// Включает HTTP-сервер, хранилище данных, логгер и опциональное подключение к базе данных.
 type ServerComponents struct {
 	server *http.Server
 	store  repository.Storage
@@ -31,6 +35,8 @@ type ServerComponents struct {
 	dbConn *sql.DB
 }
 
+// PeriodicSaver управляет автоматическим периодическим сохранением метрик на диск.
+// Запускает фоновую горутину, которая сохраняет метрики через заданные интервалы времени.
 type PeriodicSaver struct {
 	store    repository.Storage
 	interval time.Duration
@@ -40,6 +46,11 @@ type PeriodicSaver struct {
 	done     chan struct{}
 }
 
+// Serve инициализирует и запускает сервер метрик с указанной конфигурацией.
+// Настраивает хранилище (в памяти или база данных), запускает периодическое сохранение,
+// включает профилирование pprof и обрабатывает корректное завершение работы по SIGINT/SIGTERM.
+//
+// Возвращает ошибку, если запуск или завершение сервера завершились неудачей.
 func Serve(cfg config.Config) error {
 	sugar := logger.NewLogger()
 	server := setupServer(cfg, sugar)
@@ -103,6 +114,9 @@ func setupPeriodicSaver(cfg config.Config, storage repository.Storage, sugar *za
 	return saver
 }
 
+// NewPeriodicSaver создает новый экземпляр PeriodicSaver, который будет сохранять метрики
+// в указанный файл с заданным интервалом. Сохранение необходимо запустить методом Start
+// и остановить методом Stop когда оно больше не требуется.
 func NewPeriodicSaver(store repository.Storage, filePath string, interval time.Duration, logger *zap.SugaredLogger) *PeriodicSaver {
 	return &PeriodicSaver{
 		store:    store,
@@ -114,6 +128,8 @@ func NewPeriodicSaver(store repository.Storage, filePath string, interval time.D
 	}
 }
 
+// Start запускает операцию периодического сохранения в фоновой горутине.
+// Метрики будут сохраняться на диск с настроенным интервалом до вызова Stop.
 func (ps *PeriodicSaver) Start() {
 	go func() {
 		defer close(ps.done)
@@ -139,6 +155,8 @@ func (ps *PeriodicSaver) Start() {
 	}()
 }
 
+// Stop корректно останавливает операцию периодического сохранения и ожидает
+// завершения фоновой горутины.
 func (ps *PeriodicSaver) Stop() {
 	if ps.stopCh != nil {
 		close(ps.stopCh)
@@ -150,6 +168,14 @@ func runServerWithGracefulShutdown(components *ServerComponents, saver *Periodic
 	server := components.server
 	storage := components.store
 	sugar := components.logger
+
+	go func() {
+		pprofAddr := "localhost:6060"
+		sugar.Infow("pprof server started", "address", pprofAddr)
+		if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+			sugar.Errorw("pprof server error", "error", err)
+		}
+	}()
 
 	serverErr := make(chan error, 1)
 
@@ -220,7 +246,7 @@ func saveToFile(store repository.Storage, fileName string, sugar *zap.SugaredLog
 	if err != nil {
 		return fmt.Errorf("failed to get all metrics: %w", err)
 	}
-	sugar.Debugw("Retrieved metrics from storage", "count", len(allMetrics))
+	sugar.Debugw("Retrieved metrics from storage", "count", len(allMetrics.List))
 
 	data, err := serializeMetrics(allMetrics)
 	if err != nil {
@@ -256,7 +282,7 @@ func loadFromFile(store repository.Storage, fileName string, sugar *zap.SugaredL
 	}
 
 	count := 0
-	for _, m := range metrics {
+	for _, m := range metrics.List {
 		switch m.MType {
 		case "gauge":
 			if m.Value != nil {
@@ -297,20 +323,21 @@ func writeFile(fileName string, data []byte) error {
 	defer file.Close()
 
 	if _, err := file.Write(data); err != nil {
-		return fmt.Errorf("failed to write data: %w", err)
+		return fmt.Errorf("failed to write  %w", err)
 	}
 
 	return nil
 }
 
-func deserializeMetrics(data []byte, fileName string) ([]models.Metrics, error) {
-	var metrics []models.Metrics
-	if err := json.Unmarshal(data, &metrics); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metrics from %s: %w", fileName, err)
+func deserializeMetrics(data []byte, fileName string) (*models.ListMetrics, error) {
+	var metrics models.ListMetrics
+
+	if err := metrics.UnmarshalJSON(data); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metric from %s: %w", fileName, err)
 	}
-	return metrics, nil
+	return &metrics, nil
 }
 
-func serializeMetrics(metrics []models.Metrics) ([]byte, error) {
-	return json.MarshalIndent(metrics, "", "  ")
+func serializeMetrics(metrics *models.ListMetrics) ([]byte, error) {
+	return metrics.MarshalJSON()
 }
