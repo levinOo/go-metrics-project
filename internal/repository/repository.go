@@ -1,5 +1,7 @@
 package repository
 
+//go:generate go run ../../cmd/reset/main.go
+
 import (
 	"context"
 	"database/sql"
@@ -29,6 +31,7 @@ type Storage interface {
 
 // --------------------- DBStorage ---------------------
 
+// generate:reset
 type DBStorage struct {
 	db *sql.DB
 }
@@ -205,6 +208,7 @@ func (d *DBStorage) Ping(ctx context.Context) error {
 
 // --------------------- MemStorage ---------------------
 
+// generate:reset
 type MemStorage struct {
 	mu       *sync.Mutex
 	Gauges   map[string]Gauge
