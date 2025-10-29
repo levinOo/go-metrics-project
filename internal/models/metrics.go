@@ -2,6 +2,8 @@
 // Пакет не содержит бизнес-логику и используется для передачи данных между слоями приложения.
 package models
 
+//go:generate go run ../../cmd/reset/main.go
+
 // Константы типов метрик
 const (
 	// Counter представляет метрику-счётчик, значение которой только увеличивается.
@@ -12,6 +14,8 @@ const (
 )
 
 // ListMetrics содержит список метрик для пакетной обработки.
+
+// generate:reset
 type ListMetrics struct {
 	// List содержит массив метрик для одновременной отправки или обработки.
 	List []Metrics
@@ -19,6 +23,8 @@ type ListMetrics struct {
 
 // Metrics представляет отдельную метрику в системе мониторинга.
 // Поддерживает два типа метрик: gauge (с полем Value) и counter (с полем Delta).
+
+// generate:reset
 type Metrics struct {
 	// ID содержит уникальное имя метрики.
 	ID string `json:"id"`
@@ -40,6 +46,8 @@ type Metrics struct {
 
 // Data представляет событие аудита с информацией об обновлении метрик.
 // Используется для логирования операций с метриками.
+
+// generate:reset
 type Data struct {
 	// TS содержит временную метку события в формате Unix timestamp.
 	TS int64 `json:"ts"`
@@ -51,6 +59,7 @@ type Data struct {
 	IP string `json:"ip_address"`
 }
 
+// generate:reset
 type DataList struct {
 	Events []Data `json:"events"`
 }

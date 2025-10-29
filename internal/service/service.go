@@ -3,6 +3,8 @@
 // и корректным завершением работы при получении системных сигналов.
 package service
 
+//go:generate go run ../../cmd/reset/main.go
+
 import (
 	"context"
 	"database/sql"
@@ -28,6 +30,8 @@ import (
 
 // ServerComponents содержит все компоненты, необходимые для работы сервера метрик.
 // Включает HTTP-сервер, хранилище данных, логгер и опциональное подключение к базе данных.
+
+// generate:reset
 type ServerComponents struct {
 	server *http.Server
 	store  repository.Storage
@@ -37,6 +41,8 @@ type ServerComponents struct {
 
 // PeriodicSaver управляет автоматическим периодическим сохранением метрик на диск.
 // Запускает фоновую горутину, которая сохраняет метрики через заданные интервалы времени.
+
+// generate:reset
 type PeriodicSaver struct {
 	store    repository.Storage
 	interval time.Duration
