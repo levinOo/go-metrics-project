@@ -1,6 +1,6 @@
 // Package handler предоставляет HTTP-обработчики и middleware для сервера метрик.
 // Включает роутинг запросов, обработку JSON/text форматов, сжатие данных,
-// проверку HMAC-подписей и логирование запросов.
+// проверку HMAC-подписей, дешифровку RSA и логирование запросов.
 package handler
 
 import (
@@ -8,8 +8,10 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +24,7 @@ import (
 	"github.com/go-chi/chi"
 	"github.com/levinOo/go-metrics-project/internal/audit"
 	"github.com/levinOo/go-metrics-project/internal/config"
+	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
@@ -33,24 +36,26 @@ import (
 //
 // Зарегистрированные эндпоинты:
 //
-//	GET  /           - получить список всех метрик (HTML или text)
-//	GET  /ping       - проверить доступность базы данных
+//	GET  /           - список всех метрик (HTML или text)
+//	GET  /ping       - проверка доступности БД
 //	POST /updates    - пакетное обновление метрик (JSON)
-//	POST /update/    - обновить метрику (JSON)
-//	POST /update/{typeMetric}/{metric}/{value} - обновить метрику (URL params)
-//	POST /value/     - получить значение метрики (JSON)
-//	GET  /value/{typeMetric}/{metric} - получить значение метрики (URL params)
+//	POST /update/    - обновление метрики (JSON)
+//	POST /update/{typeMetric}/{metric}/{value} - обновление метрики (URL)
+//	POST /value/     - получение значения метрики (JSON)
+//	GET  /value/{typeMetric}/{metric} - получение значения метрики (URL)
 //
-// Применяемые middleware (в порядке выполнения):
-//  1. LoggerMiddleware - логирование всех запросов
-//  2. DecompressMiddleware - автоматическая декомпрессия gzip
-//  3. DecryptMiddleware - проверка HMAC-подписей
+// Middleware применяются в следующем порядке:
+//  1. LoggerMiddleware - логирование запросов
+//  2. DecryptMiddleware - дешифровка RSA
+//  3. HashValidationMiddleware - проверка HMAC
+//  4. DecompressMiddleware - декомпрессия gzip
 func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.Config) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(LoggerMiddleware(sugar))
+	r.Use(DecryptMiddleware(cfg.CryptoKeyPath))
+	r.Use(HashValidationMiddleware(cfg.Key))
 	r.Use(DecompressMiddleware())
-	r.Use(DecryptMiddleware(cfg.Key))
 
 	r.Get("/", GetListHandler(storage))
 	r.Get("/ping", PingHandler(storage))
@@ -73,10 +78,7 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 }
 
 // LoggerMiddleware создает middleware для логирования HTTP-запросов.
-// Записывает URI, метод, длительность выполнения, статус ответа и размер тела ответа.
-//
-// Использует zap.SugaredLogger для структурированного логирования.
-// Измеряет время выполнения запроса от начала до завершения.
+// Записывает URI, метод, длительность, статус и размер ответа.
 func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -106,96 +108,143 @@ func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handle
 	}
 }
 
-// DecompressMiddleware создает middleware для автоматической декомпрессии gzip-сжатых запросов.
-// Проверяет заголовок Content-Encoding и при значении "gzip" распаковывает тело запроса.
-//
-// После декомпрессии:
-//   - Заменяет r.Body на распакованные данные
-//   - Обновляет r.ContentLength для корректной обработки
-//
+// DecompressMiddleware создает middleware для декомпрессии gzip-сжатых запросов.
+// Проверяет заголовок Content-Encoding и распаковывает тело при значении "gzip".
 // Возвращает HTTP 400 при ошибках декомпрессии.
 func DecompressMiddleware() func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Content-Encoding") == "gzip" {
-				gz, err := gzip.NewReader(r.Body)
-				if err != nil {
-					http.Error(rw, "Failed to decompress gzip body", http.StatusBadRequest)
-					return
-				}
-				defer gz.Close()
-
-				body, err := io.ReadAll(gz)
-				if err != nil {
-					http.Error(rw, "Failed to read decompressed body", http.StatusInternalServerError)
-					return
-				}
-
-				r.Body = io.NopCloser(bytes.NewReader(body))
-				r.ContentLength = int64(len(body))
+			if r.Header.Get("Content-Encoding") != "gzip" {
+				log.Printf("DEBUG: No gzip encoding, skipping decompression")
+				h.ServeHTTP(rw, r)
+				return
 			}
 
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("ERROR: Failed to read body for decompression: %v", err)
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body.Close()
+
+			log.Printf("DEBUG: Decompressing %d bytes", len(body))
+
+			gr, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				log.Printf("ERROR: Failed to create gzip reader: %v", err)
+				http.Error(rw, "decompression error", http.StatusBadRequest)
+				return
+			}
+			defer gr.Close()
+
+			decompressed, err := io.ReadAll(gr)
+			if err != nil {
+				log.Printf("ERROR: Failed to decompress: %v", err)
+				http.Error(rw, "decompression error", http.StatusBadRequest)
+				return
+			}
+
+			log.Printf("DEBUG: Decompressed successfully: %d bytes -> %d bytes", len(body), len(decompressed))
+
+			r.Body = io.NopCloser(bytes.NewReader(decompressed))
 			h.ServeHTTP(rw, r)
 		})
 	}
 }
 
-// DecryptMiddleware создает middleware для проверки HMAC SHA256 подписей запросов.
-// Проверяет заголовки "Hash" или "HashSHA256" и сравнивает с вычисленной подписью.
-//
-// Алгоритм проверки:
-//  1. Извлекает хеш из заголовка запроса
-//  2. Вычисляет HMAC SHA256 от тела запроса с использованием секретного ключа
-//  3. Сравнивает полученную и ожидаемую подписи
-//
-// Параметры:
-//
-//	key: секретный ключ для HMAC. Если пустой, проверка отключена.
-//
-// Пропускает запросы без подписи или с подписью "none".
-// Возвращает HTTP 400 при несовпадении подписей или некорректном формате.
-func DecryptMiddleware(key string) func(h http.Handler) http.Handler {
+// DecryptMiddleware создает middleware для дешифровки RSA-зашифрованных запросов.
+// Загружает приватный ключ из файла и расшифровывает тело запроса гибридным методом (AES+RSA).
+// Пропускает запросы, если приватный ключ не задан или тело пустое.
+// Возвращает HTTP 400 при ошибках дешифровки.
+func DecryptMiddleware(privateKeyPath string) func(h http.Handler) http.Handler {
+	var privateKey *rsa.PrivateKey
+	if privateKeyPath != "" {
+		var err error
+		privateKey, err = cryptoutil.LoadPrivateKey(privateKeyPath)
+		if err != nil {
+			log.Printf("ERROR: failed to load private key: %v", err)
+		} else {
+			log.Printf("INFO: Private key loaded successfully")
+		}
+	}
+
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			receivedHash := r.Header.Get("Hash")
-			if receivedHash == "" {
-				receivedHash = r.Header.Get("HashSHA256")
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("ERROR: failed to read body: %v", err)
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body.Close()
+
+			log.Printf("DEBUG: Received %d bytes, privateKey != nil: %v", len(body), privateKey != nil)
+
+			if privateKey != nil && len(body) > 0 {
+				decryptedBody, err := cryptoutil.DecryptDataHybrid(privateKey, body)
+				if err != nil {
+					log.Printf("ERROR: Decryption failed: %v (body length: %d)", err, len(body))
+					http.Error(rw, "decryption failed", http.StatusBadRequest)
+					return
+				}
+				log.Printf("DEBUG: Decrypted successfully: %d bytes -> %d bytes", len(body), len(decryptedBody))
+				body = decryptedBody
 			}
 
-			if receivedHash == "" || receivedHash == "none" {
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			h.ServeHTTP(rw, r)
+		})
+	}
+}
+
+// HashValidationMiddleware создает middleware для проверки HMAC SHA256 подписей.
+// Проверяет заголовок HashSHA256 и сравнивает с вычисленной подписью.
+// Пропускает запросы без подписи, с подписью "none" или при отсутствии ключа.
+// Возвращает HTTP 400 при несовпадении подписей или некорректном формате.
+func HashValidationMiddleware(key string) func(h http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			receivedHash := r.Header.Get("HashSHA256")
+			log.Printf("DEBUG Hash: received='%s', key set=%v", receivedHash, key != "")
+
+			if receivedHash == "" || receivedHash == "none" || key == "" {
+				log.Printf("DEBUG Hash: Skipping validation")
 				h.ServeHTTP(rw, r)
 				return
 			}
 
-			if key != "" {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					log.Println("error reading r.Body:", err)
-					http.Error(rw, "read body error", http.StatusBadRequest)
-					return
-				}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Printf("ERROR Hash: Failed to read body: %v", err)
+				http.Error(rw, "read body error", http.StatusBadRequest)
+				return
+			}
+			r.Body.Close()
 
-				r.Body = io.NopCloser(bytes.NewBuffer(body))
+			log.Printf("DEBUG Hash: Validating hash on %d bytes", len(body))
 
-				sig, err := hex.DecodeString(receivedHash)
-				if err != nil {
-					log.Println("bad hash format")
-					http.Error(rw, "bad hash format", http.StatusBadRequest)
-					return
-				}
-
-				hash := hmac.New(sha256.New, []byte(key))
-				hash.Write(body)
-				expectedSig := hash.Sum(nil)
-
-				if !hmac.Equal(expectedSig, sig) {
-					log.Println("Incorrect hash")
-					log.Printf("Expected: %x, Received: %x\n", expectedSig, sig)
-					http.Error(rw, "invalid hash", http.StatusBadRequest)
-					return
-				}
+			sig, err := hex.DecodeString(receivedHash)
+			if err != nil {
+				log.Printf("ERROR Hash: Bad hash format: %v", err)
+				http.Error(rw, "bad hash format", http.StatusBadRequest)
+				return
 			}
 
+			hash := hmac.New(sha256.New, []byte(key))
+			hash.Write(body)
+			expectedSig := hash.Sum(nil)
+
+			log.Printf("DEBUG Hash: Expected=%x Received=%x", expectedSig, sig)
+
+			if !hmac.Equal(expectedSig, sig) {
+				log.Printf("ERROR Hash: Mismatch!")
+				http.Error(rw, "invalid hash", http.StatusBadRequest)
+				return
+			}
+
+			log.Printf("DEBUG Hash: Validation passed")
+			r.Body = io.NopCloser(bytes.NewReader(body))
 			h.ServeHTTP(rw, r)
 		})
 	}
@@ -203,11 +252,7 @@ func DecryptMiddleware(key string) func(h http.Handler) http.Handler {
 
 // PingHandler возвращает обработчик для проверки доступности базы данных.
 // Выполняет ping к хранилищу с таймаутом 2 секунды.
-//
-// Ответы:
-//
-//	200 OK - база данных доступна
-//	500 Internal Server Error - нет соединения с базой данных
+// Возвращает HTTP 200 при успехе, HTTP 500 при недоступности БД.
 func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -225,42 +270,36 @@ func PingHandler(dbConn repository.Storage) http.HandlerFunc {
 }
 
 // UpdatesValuesHandler возвращает обработчик для пакетного обновления метрик.
-// Принимает массив метрик в формате JSON и обновляет их одной транзакцией.
-//
-// Формат запроса:
-//
-//	POST /updates
-//	Content-Type: application/json
-//	Body: [{"id":"metric1","type":"gauge","value":42.5}, ...]
-//
-// Дополнительные функции:
-//   - Создает событие аудита с IP-адресом клиента
-//   - Добавляет HMAC-подпись в ответ, если настроен ключ
-//   - Поддерживает ответы в JSON или HTML формате
-//
-// Ответы:
-//
-//	200 OK - метрики успешно обновлены
-//	400 Bad Request - некорректный формат JSON
-//	500 Internal Server Error - ошибка при сохранении
+// Принимает массив метрик в JSON и обновляет их одной транзакцией.
+// Создает событие аудита и добавляет HMAC-подпись в ответ при наличии ключа.
+// Возвращает HTTP 200 при успехе, HTTP 400/500 при ошибках.
 func UpdatesValuesHandler(storage repository.Storage, key, path, url string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			log.Printf("ERROR Handler: Failed to read body: %v", err)
 			http.Error(rw, "failed to read body", http.StatusBadRequest)
 			return
 		}
 		defer r.Body.Close()
 
-		var metrics models.ListMetrics
-		err = metrics.UnmarshalJSON(body)
+		log.Printf("DEBUG Handler: Read %d bytes", len(body))
+
+		var metrics []models.Metrics
+		err = json.Unmarshal(body, &metrics)
 		if err != nil {
+			log.Printf("ERROR Handler: Unmarshal failed: %v", err)
 			http.Error(rw, "invalid JSON format", http.StatusBadRequest)
 			return
 		}
 
-		err = storage.InsertMetricsBatch(metrics)
+		log.Printf("DEBUG Handler: Parsed %d metrics", len(metrics))
+
+		listMetrics := models.ListMetrics{List: metrics}
+
+		err = storage.InsertMetricsBatch(listMetrics)
 		if err != nil {
+			log.Printf("ERROR Handler: InsertMetricsBatch failed: %v", err)
 			http.Error(rw, "internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -269,7 +308,7 @@ func UpdatesValuesHandler(storage repository.Storage, key, path, url string) htt
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		audit.NewAuditEvent(metrics, path, url, ip)
+		audit.NewAuditEvent(listMetrics, path, url, ip)
 
 		data := []byte(`{"status":"ok"}`)
 
@@ -280,44 +319,18 @@ func UpdatesValuesHandler(storage repository.Storage, key, path, url string) htt
 			rw.Header().Set("HashSHA256", hex.EncodeToString(sig))
 		}
 
-		if strings.Contains(r.Header.Get("Accept"), "application/json") {
-			rw.Header().Set("Content-Type", "application/json")
-			rw.WriteHeader(http.StatusOK)
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		rw.Write(data)
 
-			_, err := rw.Write(data)
-			if err != nil {
-				log.Printf("json write error: %v", err)
-			}
-		} else {
-			rw.Header().Set("Content-Type", "text/html")
-			rw.WriteHeader(http.StatusOK)
-
-			_, err := rw.Write([]byte("<html><body><h1>OK</h1></body></html>"))
-			if err != nil {
-				log.Printf("html write error: %v", err)
-			}
-		}
+		log.Printf("DEBUG Handler: Response sent successfully")
 	}
 }
 
 // UpdateValueHandler возвращает обработчик для обновления метрики через URL параметры.
 // Извлекает тип, имя и значение метрики из пути запроса.
-//
-// Формат запроса:
-//
-//	POST /update/{typeMetric}/{metric}/{value}
-//	Где: typeMetric = "gauge" или "counter"
-//
-// Примеры:
-//
-//	POST /update/gauge/temperature/23.5
-//	POST /update/counter/requests/100
-//
-// Ответы:
-//
-//	200 OK - метрика успешно обновлена
-//	400 Bad Request - некорректный тип или значение
-//	404 Not Found - отсутствует имя метрики
+// Поддерживает типы "gauge" и "counter".
+// Возвращает HTTP 200 при успехе, HTTP 400/404 при ошибках.
 func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		nameMetric := chi.URLParam(r, "metric")
@@ -359,21 +372,11 @@ func UpdateValueHandler(storage repository.Storage, sugar *zap.SugaredLogger) ht
 	}
 }
 
-// UpdateJSONHandler возвращает обработчик для обновления одной метрики в формате JSON.
-// Принимает объект метрики и обновляет её значение в хранилище.
-//
-// Формат запроса:
-//
-//	POST /update/
-//	Content-Type: application/json
-//	Body: {"id":"cpu","type":"gauge","value":45.5}
-//
-// Для counter используется поле "delta" вместо "value":
-//
-//	Body: {"id":"requests","type":"counter","delta":100}
-//
-// Добавляет HMAC-подпись в ответ, если настроен ключ.
+// UpdateJSONHandler возвращает обработчик для обновления метрики в формате JSON.
+// Принимает объект метрики и обновляет её значение.
+// Добавляет HMAC-подпись в ответ при наличии ключа.
 // Поддерживает content negotiation (JSON/HTML).
+// Возвращает HTTP 200 при успехе, HTTP 400 при ошибках.
 func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -435,28 +438,11 @@ func UpdateJSONHandler(storage repository.Storage, key string) http.HandlerFunc 
 	}
 }
 
-// GetJSONHandler возвращает обработчик для получения значения метрики в формате JSON.
-// Принимает запрос с идентификатором и типом метрики, возвращает её текущее значение.
-//
-// Формат запроса:
-//
-//	POST /value/
-//	Content-Type: application/json
-//	Body: {"id":"cpu","type":"gauge"}
-//
-// Формат ответа:
-//
-//	{"id":"cpu","type":"gauge","value":45.5}
-//
-// Дополнительные функции:
-//   - Добавляет HMAC-подпись в заголовок HashSHA256
-//   - Поддерживает gzip-сжатие ответа (Accept-Encoding: gzip)
-//
-// Ответы:
-//
-//	200 OK - метрика найдена и возвращена
-//	400 Bad Request - некорректный JSON или неизвестный тип
-//	404 Not Found - метрика не найдена
+// GetJSONHandler возвращает обработчик для получения значения метрики в JSON.
+// Принимает запрос с идентификатором и типом метрики.
+// Добавляет HMAC-подпись в заголовок HashSHA256.
+// Поддерживает gzip-сжатие ответа.
+// Возвращает HTTP 200 при успехе, HTTP 400/404 при ошибках.
 func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -535,23 +521,10 @@ func GetJSONHandler(storage repository.Storage, key string) http.HandlerFunc {
 	}
 }
 
-// GetValueHandler возвращает обработчик для получения значения метрики через URL параметры.
-// Извлекает тип и имя метрики из пути, возвращает значение в текстовом формате.
-//
-// Формат запроса:
-//
-//	GET /value/{typeMetric}/{metric}
-//
-// Примеры:
-//
-//	GET /value/gauge/temperature -> "23.5"
-//	GET /value/counter/requests -> "100"
-//
-// Ответы:
-//
-//	200 OK - возвращает значение метрики в виде текста
-//	400 Bad Request - неизвестный тип метрики
-//	404 Not Found - метрика не найдена
+// GetValueHandler возвращает обработчик для получения значения метрики через URL.
+// Извлекает тип и имя метрики из пути.
+// Возвращает значение в текстовом формате.
+// Возвращает HTTP 200 при успехе, HTTP 400/404 при ошибках.
 func GetValueHandler(storage repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		nameMetric := chi.URLParam(r, "metric")
@@ -590,21 +563,8 @@ func GetValueHandler(storage repository.Storage) http.HandlerFunc {
 
 // GetListHandler возвращает обработчик для получения списка всех метрик.
 // Форматирует вывод в зависимости от заголовка Accept (HTML или plain text).
-//
-// Формат запроса:
-//
-//	GET /
-//	Accept: text/html (для HTML) или отсутствует (для plain text)
-//
-// HTML формат:
-//
-//	Возвращает структурированный HTML с разделами "Gauges" и "Counters"
-//
-// Plain text формат:
-//
-//	Каждая метрика на отдельной строке: "name: value"
-//
-// Поддерживает gzip-сжатие ответа при наличии Accept-Encoding: gzip.
+// Поддерживает gzip-сжатие ответа.
+// Возвращает HTTP 200 при успехе, HTTP 500 при ошибках.
 func GetListHandler(storage repository.Storage) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder

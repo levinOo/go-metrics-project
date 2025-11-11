@@ -38,6 +38,8 @@ type Config struct {
 	// Пустое значение отключает проверку подписей.
 	Key string `env:"KEY"`
 
+	CryptoKeyPath string `env:"CRYPTO_KEY"`
+
 	// AuditFile указывает путь к файлу для записи аудит-логов.
 	AuditFile string `env:"AUDIT_FILE"`
 
@@ -70,7 +72,8 @@ func GetConfig() (Config, error) {
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
 	addrDBFlag := flag.String("d", "", "Database address")
-	key := flag.String("k", "", "Hash key")
+	key := flag.String("k", "hello", "Hash key")
+	cryptoKeyPath := flag.String("c", "../keys/private.pem", "crypto key")
 	auditFile := flag.String("p", "./audit.json", "audit file path")
 	auditURL := flag.String("u", "", "audit url")
 
@@ -83,6 +86,7 @@ func GetConfig() (Config, error) {
 		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag),
 		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag),
 		Key:           getString(os.Getenv("KEY"), *key),
+		CryptoKeyPath: getString(os.Getenv("CRYPTO_KEY"), *cryptoKeyPath),
 		AuditFile:     getString(os.Getenv("AUDIT_FILE"), *auditFile),
 		AuditURL:      getString(os.Getenv("AUDIT_URL"), *auditURL),
 	}

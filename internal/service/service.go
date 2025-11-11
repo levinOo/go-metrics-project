@@ -18,6 +18,7 @@ import (
 
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/config/db"
+	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
 	"github.com/levinOo/go-metrics-project/internal/handler"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
@@ -67,6 +68,12 @@ func Serve(cfg config.Config) error {
 
 func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents {
 	sugar.Infow("Starting server with config", "address", cfg.Addr, "storeInterval", cfg.StoreInterval, "fileStorage", cfg.FileStorage, "restore", cfg.Restore, "addressDB", cfg.AddrDB, "hash key", cfg.Key)
+
+	err := cryptoutil.EnsureKeypair(cfg)
+	if err != nil {
+		sugar.Errorw("Failed to create Keypair", "error", err)
+		return nil
+	}
 
 	var storage repository.Storage
 	var dbConn *sql.DB
