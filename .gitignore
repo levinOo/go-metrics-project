@@ -22,7 +22,7 @@ cmd/server/main
 cmd/server/server
 
 # Directory
-./keys
+/keys
 
 # Dependency directories (remove the comment below to include it)
 vendor/

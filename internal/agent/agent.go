@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,21 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caarlos0/env/v11"
 	"github.com/hashicorp/go-retryablehttp"
+	"github.com/levinOo/go-metrics-project/internal/agent/config"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
 	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
 	"github.com/levinOo/go-metrics-project/internal/models"
 )
-
-type Config struct {
-	Addr          string `env:"ADDRESS"`
-	Key           string `env:"KEY"`
-	PollInterval  int    `env:"POLL_INTERVAL"`
-	ReqInterval   int    `env:"REPORT_INTERVAL"`
-	RateLimit     int    `env:"RATE_LIMIT"`
-	CryptoKeyPath string `env:"CRYPTO_KEY"`
-}
 
 func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int, publicKey *rsa.PublicKey) error {
 	metrics := m.ValuesAllTyped()
@@ -194,23 +184,20 @@ func CompressData(data []byte) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+type Config struct {
+	Addr          string `env:"ADDRESS"`
+	Key           string `env:"KEY"`
+	PollInterval  int    `env:"POLL_INTERVAL"`
+	ReqInterval   int    `env:"REPORT_INTERVAL"`
+	RateLimit     int    `env:"RATE_LIMIT"`
+	CryptoKeyPath string `env:"CRYPTO_KEY"`
+}
+
 func StartAgent() <-chan error {
-	cfg := Config{}
+	cfg := config.NewConfig()
+	config.GetAgentConfig(cfg)
+
 	errCh := make(chan error)
-
-	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "Адрес сервера")
-	flag.StringVar(&cfg.Key, "k", "hello", "Ключ шифрования")
-	flag.StringVar(&cfg.CryptoKeyPath, "c", "../keys/public.pem", "Публичный ключ шифрования")
-	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
-	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
-	flag.IntVar(&cfg.RateLimit, "l", 1, "Значение Rate Limit")
-	flag.Parse()
-
-	err := env.Parse(&cfg)
-	if err != nil {
-		errCh <- fmt.Errorf("ошибка парсинга ENV: %w", err)
-		return errCh
-	}
 
 	publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKeyPath)
 	if err != nil {
