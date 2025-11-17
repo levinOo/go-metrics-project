@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -12,8 +13,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
@@ -210,19 +214,34 @@ func StartAgent() <-chan error {
 
 	semaphore := make(chan struct{}, cfg.RateLimit)
 
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+
 	go func() {
 		pollTicker := time.NewTicker(time.Second * time.Duration((cfg.PollInterval)))
 		reqTicker := time.NewTicker(time.Second * time.Duration((cfg.ReqInterval)))
 
+		defer pollTicker.Stop()
+		defer reqTicker.Stop()
+
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-pollTicker.C:
+				wg.Add(1)
 				go func() {
+					defer wg.Done()
 					m.CollectMetrics()
 				}()
 
 			case <-reqTicker.C:
+				wg.Add(1)
 				go func() {
+					defer wg.Done()
 					semaphore <- struct{}{}
 					defer func() { <-semaphore }()
 
@@ -234,6 +253,19 @@ func StartAgent() <-chan error {
 				}()
 			}
 		}
+	}()
+
+	for {
+		<-quit
+		log.Printf("Running graceful shutdown")
+		cancel()
+		break
+	}
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+		log.Printf("Graceful shutdown completed")
 	}()
 
 	return errCh

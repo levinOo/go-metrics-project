@@ -201,7 +201,7 @@ func runServerWithGracefulShutdown(components *ServerComponents, saver *Periodic
 	}()
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 	select {
 	case err := <-serverErr:
