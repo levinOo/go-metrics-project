@@ -3,34 +3,31 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
-	"github.com/caarlos0/env/v11"
 	"github.com/hashicorp/go-retryablehttp"
+	"github.com/levinOo/go-metrics-project/internal/agent/config"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
+	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
 	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
-type Config struct {
-	Addr         string `env:"ADDRESS"`
-	Key          string `env:"KEY"`
-	PollInterval int    `env:"POLL_INTERVAL"`
-	ReqInterval  int    `env:"REPORT_INTERVAL"`
-	RateLimit    int    `env:"RATE_LIMIT"`
-}
-
-func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int) error {
+func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int, publicKey *rsa.PublicKey) error {
 	metrics := m.ValuesAllTyped()
 	var metricsList []models.Metrics
 
@@ -93,10 +90,10 @@ func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, 
 		}
 	}
 
-	return sendMetricsBatch(metricsList, endpoint, key)
+	return sendMetricsBatch(metricsList, endpoint, key, publicKey)
 }
 
-func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) error {
+func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string, publicKey *rsa.PublicKey) error {
 	url, err := url.JoinPath(endpoint, "updates")
 	if err != nil {
 		return fmt.Errorf("failed to join URL path: %w", err)
@@ -107,14 +104,21 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) err
 		return fmt.Errorf("failed to marshal metrics: %w", err)
 	}
 
-	var hashString string
-	if key != "" {
-		hashString = calculateSHA256Hash(data, key)
-	}
-
 	buffer, err := CompressData(data)
 	if err != nil {
-		return fmt.Errorf("failed to compress data: %w", err)
+		return fmt.Errorf("failed to compress: %w", err)
+	}
+
+	var hashString string
+	if key != "" {
+		hashString = calculateSHA256Hash(buffer, key)
+	}
+
+	if publicKey != nil {
+		buffer, err = cryptoutil.EncryptDataHybrid(publicKey, buffer)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt: %w", err)
+		}
 	}
 
 	client := retryablehttp.NewClient()
@@ -123,17 +127,13 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string) err
 	client.RetryWaitMin = 1 * time.Second
 	client.Backoff = customBackoff
 
-	client.Backoff = customBackoff
-
-	req, err := retryablehttp.NewRequest("POST", url, buffer)
+	req, err := retryablehttp.NewRequest("POST", url, bytes.NewReader(buffer))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Accept-Encoding", "gzip")
 
 	if hashString != "" {
 		req.Header.Set("HashSHA256", hashString)
@@ -188,20 +188,24 @@ func CompressData(data []byte) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+type Config struct {
+	Addr          string `env:"ADDRESS"`
+	Key           string `env:"KEY"`
+	PollInterval  int    `env:"POLL_INTERVAL"`
+	ReqInterval   int    `env:"REPORT_INTERVAL"`
+	RateLimit     int    `env:"RATE_LIMIT"`
+	CryptoKeyPath string `env:"CRYPTO_KEY"`
+}
+
 func StartAgent() <-chan error {
-	cfg := Config{}
+	cfg := config.NewConfig()
+	config.GetAgentConfig(cfg)
+
 	errCh := make(chan error)
 
-	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "Адрес сервера")
-	flag.StringVar(&cfg.Key, "k", "", "Ключ шифрования")
-	flag.IntVar(&cfg.PollInterval, "p", 2, "Значение интервала обновления метрик в секундах")
-	flag.IntVar(&cfg.ReqInterval, "r", 10, "Значение интервала отпрвки в секундах")
-	flag.IntVar(&cfg.RateLimit, "l", 1, "Значение Rate Limit")
-	flag.Parse()
-
-	err := env.Parse(&cfg)
+	publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKeyPath)
 	if err != nil {
-		errCh <- fmt.Errorf("ошибка парсинга ENV: %w", err)
+		errCh <- fmt.Errorf("ошибка создвния Public key: %w", err)
 		return errCh
 	}
 
@@ -210,23 +214,38 @@ func StartAgent() <-chan error {
 
 	semaphore := make(chan struct{}, cfg.RateLimit)
 
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+
 	go func() {
 		pollTicker := time.NewTicker(time.Second * time.Duration((cfg.PollInterval)))
 		reqTicker := time.NewTicker(time.Second * time.Duration((cfg.ReqInterval)))
 
+		defer pollTicker.Stop()
+		defer reqTicker.Stop()
+
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-pollTicker.C:
+				wg.Add(1)
 				go func() {
+					defer wg.Done()
 					m.CollectMetrics()
 				}()
 
 			case <-reqTicker.C:
+				wg.Add(1)
 				go func() {
+					defer wg.Done()
 					semaphore <- struct{}{}
 					defer func() { <-semaphore }()
 
-					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit)
+					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit, publicKey)
 
 					if err != nil {
 						log.Printf("Final sending metrics error: %v", err)
@@ -234,6 +253,19 @@ func StartAgent() <-chan error {
 				}()
 			}
 		}
+	}()
+
+	for {
+		<-quit
+		log.Printf("Running graceful shutdown")
+		cancel()
+		break
+	}
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+		log.Printf("Graceful shutdown completed")
 	}()
 
 	return errCh

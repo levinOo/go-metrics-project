@@ -19,7 +19,7 @@ type Resettable interface {
 // Pool хранит объекты типа T, ограниченных Resettable.
 // T обычно является указателем на структуру, например *Config.
 type Pool[T Resettable] struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	items   []T
 	Factory func() T
 }
