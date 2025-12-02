@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"google.golang.org/grpc"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/config/db"
 	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
 	"github.com/levinOo/go-metrics-project/internal/handler"
+	grpcsrv "github.com/levinOo/go-metrics-project/internal/grpc"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
@@ -34,10 +36,11 @@ import (
 
 // generate:reset
 type ServerComponents struct {
-	server *http.Server
-	store  repository.Storage
-	logger *zap.SugaredLogger
-	dbConn *sql.DB
+	server     *http.Server
+	grpcServer *grpc.Server
+	store      repository.Storage
+	logger     *zap.SugaredLogger
+	dbConn     *sql.DB
 }
 
 // PeriodicSaver управляет автоматическим периодическим сохранением метрик на диск.
@@ -112,11 +115,23 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) (*ServerComponents
 		Handler: router,
 	}
 
+	// Запуск gRPC сервера если адрес указан
+	var grpcSrv *grpc.Server
+	if cfg.GRPCAddr != "" {
+		var err error
+		grpcSrv, err = grpcsrv.StartGRPCServer(cfg.GRPCAddr, storage, sugar, cfg.TrustedSubnet)
+		if err != nil {
+			sugar.Errorw("Failed to start gRPC server", "error", err)
+			return nil, err
+		}
+	}
+
 	return &ServerComponents{
-		server: srv,
-		store:  storage,
-		logger: sugar,
-		dbConn: dbConn,
+		server:     srv,
+		grpcServer: grpcSrv,
+		store:      storage,
+		logger:     sugar,
+		dbConn:     dbConn,
 	}, nil
 }
 
@@ -184,6 +199,7 @@ func (ps *PeriodicSaver) Stop() {
 
 func runServerWithGracefulShutdown(components *ServerComponents, saver *PeriodicSaver, cfg config.Config) error {
 	server := components.server
+	grpcServer := components.grpcServer
 	storage := components.store
 	sugar := components.logger
 
@@ -215,18 +231,27 @@ func runServerWithGracefulShutdown(components *ServerComponents, saver *Periodic
 			if saver != nil {
 				saver.Stop()
 			}
+			if grpcServer != nil {
+				grpcServer.GracefulStop()
+			}
 			return fmt.Errorf("server error: %w", err)
 		}
 	case <-quit:
 		sugar.Infoln("Shutting down server...")
 	}
 
-	return gracefulShutdown(cfg, sugar, storage, server, saver, components.dbConn)
+	return gracefulShutdown(cfg, sugar, storage, server, grpcServer, saver, components.dbConn)
 }
 
-func gracefulShutdown(cfg config.Config, sugar *zap.SugaredLogger, store repository.Storage, srv *http.Server, saver *PeriodicSaver, dbConn *sql.DB) error {
+func gracefulShutdown(cfg config.Config, sugar *zap.SugaredLogger, store repository.Storage, srv *http.Server, grpcSrv *grpc.Server, saver *PeriodicSaver, dbConn *sql.DB) error {
 	if saver != nil {
 		saver.Stop()
+	}
+
+	// Остановка gRPC сервера
+	if grpcSrv != nil {
+		sugar.Infow("Stopping gRPC server")
+		grpcSrv.GracefulStop()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

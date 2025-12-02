@@ -27,6 +27,7 @@ type ConfigStruct struct {
 	CryptoKeysPath string `json:"crypto_keys"`
 	AuditFile      string `json:"audit_file"`
 	AuditURL       string `json:"audit_url"`
+	GRPCAddr       string `json:"grpc_address"`
 }
 
 // generate:reset
@@ -63,6 +64,9 @@ type Config struct {
 
 	// AuditURL содержит URL для отправки аудит-событий на внешний сервис.
 	AuditURL string `env:"AUDIT_URL"`
+
+	// GRPCAddr задает адрес и порт gRPC-сервера (например, "localhost:50051").
+	GRPCAddr string `env:"GRPC_ADDRESS"`
 }
 
 func NewConfigStruct() *ConfigStruct {
@@ -102,6 +106,7 @@ func GetConfig() (Config, error) {
 	cryptoKeysPath := flag.String("c", "./keys", "crypto keys path for creating")
 	auditFile := flag.String("p", "./audit.json", "audit file path")
 	auditURL := flag.String("u", "", "audit url")
+	grpcAddrFlag := flag.String("grpc", "localhost:50051", "gRPC server address")
 
 	flag.Parse()
 
@@ -132,6 +137,7 @@ func GetConfig() (Config, error) {
 		CryptoKeysPath: getString(os.Getenv("CRYPTO_KEYS"), *cryptoKeysPath, configStruct.CryptoKeysPath),
 		AuditFile:      getString(os.Getenv("AUDIT_FILE"), *auditFile, configStruct.AuditFile),
 		AuditURL:       getString(os.Getenv("AUDIT_URL"), *auditURL, configStruct.AuditURL),
+		GRPCAddr:       getString(os.Getenv("GRPC_ADDRESS"), *grpcAddrFlag, configStruct.GRPCAddr),
 	}
 
 	return cfg, nil
