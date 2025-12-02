@@ -57,7 +57,7 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r.Use(LoggerMiddleware(sugar))
 	r.Use(DecryptMiddleware(cfg.CryptoKeysPath))
 	r.Use(HashValidationMiddleware(cfg.Key))
-	// r.Use(TrustedIpMiddleware(cfg.TrustedSubnet))
+	r.Use(TrustedIPMiddleware(cfg.TrustedSubnet))
 	r.Use(DecompressMiddleware())
 
 	r.Get("/", GetListHandler(storage))
@@ -111,7 +111,7 @@ func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handle
 	}
 }
 
-func TrustedIpMiddleware(trustedIP string) func(h http.Handler) http.Handler {
+func TrustedIPMiddleware(trustedIP string) func(h http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 			if trustedIP != "" {
