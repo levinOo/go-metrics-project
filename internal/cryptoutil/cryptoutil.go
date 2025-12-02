@@ -21,22 +21,45 @@ import (
 // EnsureKeypair проверяет наличие ключевой пары RSA по пути, заданному в cfg.CryptoKeyPath.
 // Если ключи отсутствуют, генерирует пару и сохраняет в файлы private.pem и public.pem.
 func EnsureKeypair(cfg config.Config) error {
-	if cfg.CryptoKeyPath == "" {
+	if cfg.CryptoKeysPath == "" {
 		return nil
 	}
 
-	dir := filepath.Dir(cfg.CryptoKeyPath)
+	absPath, err := filepath.Abs(cfg.CryptoKeysPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path: %w", err)
+	}
+
+	// Проверяем, является ли путь файлом или директорией
+	info, err := os.Stat(absPath)
+	var dir string
+	if err == nil && !info.IsDir() {
+		// Если это файл, берём его директорию
+		dir = filepath.Dir(absPath)
+	} else {
+		dir = absPath
+	}
 
 	privateKeyPath := filepath.Join(dir, "private.pem")
 	publicKeyPath := filepath.Join(dir, "public.pem")
 
+	// Проверяем существование приватного ключа
 	if _, err := os.Stat(privateKeyPath); os.IsNotExist(err) {
+		// Создаём директорию, если её нет
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
+
+		fmt.Printf("Generating new keypair in %s\n", dir)
+
 		if err := GenerateAndSaveKeypair(privateKeyPath, publicKeyPath); err != nil {
 			return fmt.Errorf("failed to generate keypair: %w", err)
 		}
+
+		fmt.Printf("Keypair generated successfully:\n  Private: %s\n  Public: %s\n",
+			privateKeyPath, publicKeyPath)
+	} else {
+		fmt.Printf("Using existing keypair from %s\n", dir)
 	}
 
 	return nil

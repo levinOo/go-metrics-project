@@ -91,6 +91,7 @@ func (a *FileAuditer) Update(data models.Data) {
 	}
 
 	var dataList models.DataList
+
 	fileData, err := os.ReadFile(a.path)
 	if err != nil {
 		log.Printf("failed to read file %s: %v", a.path, err)

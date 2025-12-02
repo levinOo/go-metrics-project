@@ -60,19 +60,24 @@ type PeriodicSaver struct {
 // Возвращает ошибку, если запуск или завершение сервера завершились неудачей.
 func Serve(cfg config.Config) error {
 	sugar := logger.NewLogger()
-	server := setupServer(cfg, sugar)
+
+	server, err := setupServer(cfg, sugar)
+	if err != nil {
+		return err
+	}
+
 	saver := setupPeriodicSaver(cfg, server.store, sugar)
 
 	return runServerWithGracefulShutdown(server, saver, cfg)
 }
 
-func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents {
-	sugar.Infow("Starting server with config", "address", cfg.Addr, "storeInterval", cfg.StoreInterval, "fileStorage", cfg.FileStorage, "restore", cfg.Restore, "addressDB", cfg.AddrDB, "hash key", cfg.Key)
+func setupServer(cfg config.Config, sugar *zap.SugaredLogger) (*ServerComponents, error) {
+	sugar.Infow("Starting server with config", "address", cfg.Addr, "storeInterval", cfg.StoreInterval, "fileStorage", cfg.FileStorage, "restore", cfg.Restore, "addressDB", cfg.AddrDB)
 
 	err := cryptoutil.EnsureKeypair(cfg)
 	if err != nil {
 		sugar.Errorw("Failed to create Keypair", "error", err)
-		return nil
+		return nil, err
 	}
 
 	var storage repository.Storage
@@ -82,7 +87,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		dbConn, err := db.ConnectDB(cfg.AddrDB, sugar)
 		if err != nil {
 			sugar.Errorw("Failed to connect to DB", "error", err)
-			return nil
+			return nil, err
 		}
 
 		if err := db.RunMigrations(cfg.AddrDB); err != nil {
@@ -112,7 +117,7 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) *ServerComponents 
 		store:  storage,
 		logger: sugar,
 		dbConn: dbConn,
-	}
+	}, nil
 }
 
 func setupPeriodicSaver(cfg config.Config, storage repository.Storage, sugar *zap.SugaredLogger) *PeriodicSaver {

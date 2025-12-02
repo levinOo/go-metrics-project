@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -139,6 +140,15 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string, pub
 		req.Header.Set("HashSHA256", hashString)
 	}
 
+	ip, err := getLocalIP()
+	if err != nil {
+		return fmt.Errorf("could not find IP address")
+	}
+
+	log.Println(ip)
+
+	req.Header.Set("X-Real-IP", ip)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch request: %w", err)
@@ -150,6 +160,23 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string, pub
 	}
 
 	return nil
+}
+
+func getLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("не удалось найти IP-адрес")
 }
 
 func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
@@ -205,7 +232,7 @@ func StartAgent() <-chan error {
 
 	publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKeyPath)
 	if err != nil {
-		errCh <- fmt.Errorf("ошибка создвния Public key: %w", err)
+		errCh <- fmt.Errorf("ошибка создание Public key: %w", err)
 		return errCh
 	}
 

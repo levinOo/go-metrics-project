@@ -12,7 +12,7 @@ type ConfigStruct struct {
 	Addr          string `json:"address"`
 	Key           string `json:"key"`
 	PollInterval  int    `json:"poll_interval"`
-	ReqInterval   int    `json:"req_intervaal"`
+	ReqInterval   int    `json:"req_interval"`
 	RateLimit     int    `json:"rate_limit"`
 	CryptoKeyPath string `json:"crypto_key"`
 }
@@ -54,7 +54,13 @@ func GetAgentConfig(cfg *Config) error {
 		return err
 	}
 
-	json.NewDecoder(data).Decode(configStruct)
+	err = json.NewDecoder(data).Decode(configStruct)
+	if err != nil {
+		log.Printf("ошибка парсинга JSON: %v", err)
+		return err
+	}
+
+	//проверка необходимых полей
 
 	cfg.Addr = getString(os.Getenv("ADDRESS"), *addr, configStruct.Addr)
 	cfg.Key = getString(os.Getenv("KEY"), *key, configStruct.Key)
