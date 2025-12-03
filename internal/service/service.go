@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"google.golang.org/grpc"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -17,11 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/levinOo/go-metrics-project/internal/config"
 	"github.com/levinOo/go-metrics-project/internal/config/db"
 	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
-	"github.com/levinOo/go-metrics-project/internal/handler"
 	grpcsrv "github.com/levinOo/go-metrics-project/internal/grpc"
+	"github.com/levinOo/go-metrics-project/internal/handler"
 	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/repository"
@@ -115,7 +116,6 @@ func setupServer(cfg config.Config, sugar *zap.SugaredLogger) (*ServerComponents
 		Handler: router,
 	}
 
-	// Запуск gRPC сервера если адрес указан
 	var grpcSrv *grpc.Server
 	if cfg.GRPCAddr != "" {
 		var err error

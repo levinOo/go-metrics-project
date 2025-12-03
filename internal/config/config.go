@@ -106,7 +106,7 @@ func GetConfig() (Config, error) {
 	cryptoKeysPath := flag.String("c", "./keys", "crypto keys path for creating")
 	auditFile := flag.String("p", "./audit.json", "audit file path")
 	auditURL := flag.String("u", "", "audit url")
-	grpcAddrFlag := flag.String("grpc", "localhost:50051", "gRPC server address")
+	grpcAddrFlag := flag.String("grpc", "localhost:5050", "gRPC server address")
 
 	flag.Parse()
 

@@ -1,4 +1,4 @@
-// Package client предоставляет gRPC-клиент для отправки метрик на сервер.
+// Package grpc предоставляет gRPC-клиент для отправки метрик на сервер.
 package grpc
 
 import (
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/levinOo/go-metrics-project/internal/models"
 	"github.com/levinOo/go-metrics-project/internal/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -79,51 +80,63 @@ func (c *GRPCClient) Close() error {
 
 // convertMetricsToProto преобразует внутренние модели метрик в proto модели.
 func convertMetricsToProto(metricsInterface interface{}) ([]*proto.Metric, error) {
-	// Пытаемся получить срез метрик из интерфейса
-	// Эта функция работает с внутренними моделями models.Metrics
-	// которые передаются из агента
-
-	type MetricModel struct {
-		ID    string
-		MType string
-		Delta *int64
-		Value *float64
-	}
-
 	var protoMetrics []*proto.Metric
 
-	// Используем type assertion для обработки различных типов
+	// Обрабатываем различные типы входных данных
 	switch v := metricsInterface.(type) {
 	case []interface{}:
+		// Если передан срез интерфейсов
 		for _, item := range v {
-			if metric, ok := item.(MetricModel); ok {
-				pm := &proto.Metric{
-					Id: metric.ID,
+			if metric, ok := item.(models.Metrics); ok {
+				pm, err := convertSingleMetric(metric)
+				if err != nil {
+					return nil, err
 				}
-
-				switch metric.MType {
-				case "gauge":
-					pm.Type = proto.Metric_GAUGE
-					if metric.Value != nil {
-						pm.Value = *metric.Value
-					}
-				case "counter":
-					pm.Type = proto.Metric_COUNTER
-					if metric.Delta != nil {
-						pm.Delta = *metric.Delta
-					}
-				default:
-					return nil, fmt.Errorf("unknown metric type: %s", metric.MType)
-				}
-
 				protoMetrics = append(protoMetrics, pm)
 			}
 		}
+	case []models.Metrics:
+		// Если передан срез models.Metrics напрямую
+		for _, metric := range v {
+			pm, err := convertSingleMetric(metric)
+			if err != nil {
+				return nil, err
+			}
+			protoMetrics = append(protoMetrics, pm)
+		}
 	default:
-		return nil, fmt.Errorf("unsupported metrics type")
+		return nil, fmt.Errorf("unsupported metrics type: %T", metricsInterface)
 	}
 
 	return protoMetrics, nil
+}
+
+// convertSingleMetric преобразует одну метрику из models.Metrics в proto.Metric
+func convertSingleMetric(metric models.Metrics) (*proto.Metric, error) {
+	pm := &proto.Metric{
+		Id: metric.ID,
+	}
+
+	switch metric.MType {
+	case "gauge":
+		pm.Type = proto.Metric_GAUGE
+		if metric.Value != nil {
+			pm.Value = *metric.Value
+		} else {
+			return nil, fmt.Errorf("gauge metric %s has nil value", metric.ID)
+		}
+	case "counter":
+		pm.Type = proto.Metric_COUNTER
+		if metric.Delta != nil {
+			pm.Delta = *metric.Delta
+		} else {
+			return nil, fmt.Errorf("counter metric %s has nil delta", metric.ID)
+		}
+	default:
+		return nil, fmt.Errorf("unknown metric type: %s for metric %s", metric.MType, metric.ID)
+	}
+
+	return pm, nil
 }
 
 // GetAgentIP получает IP-адрес агента для передачи в метаданных.
@@ -143,5 +156,6 @@ func GetAgentIP() (string, error) {
 		}
 	}
 
+	// Возвращаем default IP для локальной разработки
 	return defaultTrustedIP, nil
 }

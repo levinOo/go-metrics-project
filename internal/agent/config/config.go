@@ -3,9 +3,10 @@ package config
 import (
 	"encoding/json"
 	"flag"
-	"log"
 	"os"
 	"strconv"
+
+	"go.uber.org/zap"
 )
 
 type ConfigStruct struct {
@@ -38,7 +39,7 @@ func NewConfig() *Config {
 	return &Config{}
 }
 
-func GetAgentConfig(cfg *Config) error {
+func GetAgentConfig(cfg *Config, sugar *zap.SugaredLogger) error {
 	configStruct := NewConfigStruct()
 
 	addr := flag.String("a", "localhost:8080", "Адрес сервера")
@@ -48,25 +49,23 @@ func GetAgentConfig(cfg *Config) error {
 	pollInterval := flag.String("p", "2", "Значение интервала обновления метрик в секундах")
 	reqInterval := flag.String("r", "10", "Значение интервала отпрвки в секундах")
 	rateLimit := flag.String("l", "1", "Значение Rate Limit")
-	useGRPC := flag.String("grpc", "false", "Использовать gRPC вместо HTTP")
-	grpcServerAddr := flag.String("grpc-addr", "localhost:50051", "Адрес gRPC сервера")
+	useGRPC := flag.String("grpc", "true", "Использовать gRPC вместо HTTP")
+	grpcServerAddr := flag.String("grpc-addr", "localhost:5050", "Адрес gRPC сервера")
 
 	flag.Parse()
 
 	configPath := getConfigPath(*configPathFlag, os.Getenv("CONFIG"))
 	data, err := os.Open(configPath)
 	if err != nil {
-		log.Printf("Не удалось открыть файл: %v", err)
+		sugar.Errorf("Не удалось открыть файл: %v", err)
 		return err
 	}
 
 	err = json.NewDecoder(data).Decode(configStruct)
 	if err != nil {
-		log.Printf("ошибка парсинга JSON: %v", err)
+		sugar.Errorf("Ошибка парсинга JSON: %v", err)
 		return err
 	}
-
-	//проверка необходимых полей
 
 	cfg.Addr = getString(os.Getenv("ADDRESS"), *addr, configStruct.Addr)
 	cfg.Key = getString(os.Getenv("KEY"), *key, configStruct.Key)
