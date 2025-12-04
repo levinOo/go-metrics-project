@@ -49,8 +49,8 @@ func GetAgentConfig(cfg *Config, sugar *zap.SugaredLogger) error {
 	pollInterval := flag.String("p", "2", "Значение интервала обновления метрик в секундах")
 	reqInterval := flag.String("r", "10", "Значение интервала отпрвки в секундах")
 	rateLimit := flag.String("l", "1", "Значение Rate Limit")
-	useGRPC := flag.String("grpc", "true", "Использовать gRPC вместо HTTP")
-	grpcServerAddr := flag.String("grpc-addr", "localhost:5050", "Адрес gRPC сервера")
+	useGRPC := flag.String("grpc", "false", "Использовать gRPC вместо HTTP")
+	grpcServerAddr := flag.String("grpc-addr", "localhost:50051", "Адрес gRPC сервера")
 
 	flag.Parse()
 

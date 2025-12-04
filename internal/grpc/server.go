@@ -20,34 +20,49 @@ type MetricsStruct struct {
 	trustedSubnet string
 }
 
+// UpdateMetrics обрабатывает запрос на обновление метрик.
+// Используем Opaque API - только геттеры для чтения полей.
 func (m *MetricsStruct) UpdateMetrics(ctx context.Context, req *pb.UpdateMetricsRequest) (*pb.UpdateMetricsResponse, error) {
-	if len(req.Metrics) == 0 {
+	// Используем геттер для получения метрик из запроса
+	metrics := req.GetMetrics()
+
+	if len(metrics) == 0 {
 		m.logger.Info("Received empty metrics list")
 		return &pb.UpdateMetricsResponse{}, nil
 	}
 
-	for _, metric := range req.Metrics {
+	for _, metric := range metrics {
 		if err := m.saveMetric(metric); err != nil {
-			m.logger.Errorf("Failed to save metric %s: %v", metric.Id, err)
+			// Используем геттер для получения ID метрики
+			m.logger.Errorf("Failed to save metric %s: %v", metric.GetId(), err)
 			return nil, err
 		}
 	}
 
-	m.logger.Infof("Successfully updated %d metrics", len(req.Metrics))
+	m.logger.Infof("Successfully updated %d metrics", len(metrics))
 	return &pb.UpdateMetricsResponse{}, nil
 }
 
+// saveMetric сохраняет одну метрику в хранилище.
+// Используем Opaque API - только геттеры для чтения полей.
 func (m *MetricsStruct) saveMetric(metric *pb.Metric) error {
-	switch metric.Type {
+	// Используем геттеры для получения значений всех полей
+	metricType := metric.GetType()
+	metricId := metric.GetId()
+
+	switch metricType {
 	case pb.Metric_GAUGE:
-		return m.store.SetGauge(metric.Id, repository.Gauge(metric.Value))
+		metricValue := metric.GetValue()
+		return m.store.SetGauge(metricId, repository.Gauge(metricValue))
 	case pb.Metric_COUNTER:
-		return m.store.SetCounter(metric.Id, repository.Counter(metric.Delta))
+		metricDelta := metric.GetDelta()
+		return m.store.SetCounter(metricId, repository.Counter(metricDelta))
 	default:
-		return fmt.Errorf("unknown metric type: %v", metric.Type)
+		return fmt.Errorf("unknown metric type: %v", metricType)
 	}
 }
 
+// trustedIPInterceptor создает gRPC interceptor для проверки доверенных IP адресов.
 func trustedIPInterceptor(trustedSubnet string, sugar *zap.SugaredLogger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Если доверенная подсеть не указана, пропускаем проверку
@@ -108,6 +123,7 @@ func trustedIPInterceptor(trustedSubnet string, sugar *zap.SugaredLogger) grpc.U
 	}
 }
 
+// StartGRPCServer создает и запускает gRPC сервер.
 func StartGRPCServer(addr string, store repository.Storage, sugar *zap.SugaredLogger, trustedSubnet string) (*grpc.Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -115,8 +131,10 @@ func StartGRPCServer(addr string, store repository.Storage, sugar *zap.SugaredLo
 		return nil, err
 	}
 
+	// Создаем gRPC сервер с interceptor для проверки IP
 	s := grpc.NewServer(grpc.UnaryInterceptor(trustedIPInterceptor(trustedSubnet, sugar)))
 
+	// Регистрируем сервис метрик
 	pb.RegisterMetricsServer(s, &MetricsStruct{
 		store:         store,
 		logger:        sugar,
@@ -125,6 +143,7 @@ func StartGRPCServer(addr string, store repository.Storage, sugar *zap.SugaredLo
 
 	sugar.Infof("gRPC server started on %s", addr)
 
+	// Запускаем сервер в отдельной горутине
 	go func() {
 		if err := s.Serve(listener); err != nil {
 			sugar.Errorf("gRPC server error: %v", err)

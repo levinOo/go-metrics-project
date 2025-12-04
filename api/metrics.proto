@@ -2,8 +2,7 @@ syntax = "proto3";
 
 package metrics;
 
-option go_package = "github.com/your-repo/your-project/internal/proto";
-option go_api = "opaque";
+option go_package = "github.com/levinOo/go-metrics-project/internal/proto";
 
 // Metric определяет единичную метрику.
 message Metric {

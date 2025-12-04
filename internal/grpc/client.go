@@ -61,6 +61,7 @@ func (c *GRPCClient) SendMetrics(ctx context.Context, metrics interface{}, agent
 	})
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
+	// Создаем запрос - используем Open Struct API (прямой доступ к полям)
 	req := &proto.UpdateMetricsRequest{
 		Metrics: protoMetrics,
 	}
@@ -112,6 +113,7 @@ func convertMetricsToProto(metricsInterface interface{}) ([]*proto.Metric, error
 }
 
 // convertSingleMetric преобразует одну метрику из models.Metrics в proto.Metric
+// Используем Open Struct API (protogen:"open.v1") - прямой доступ к экспортированным полям
 func convertSingleMetric(metric models.Metrics) (*proto.Metric, error) {
 	pm := &proto.Metric{
 		Id: metric.ID,
@@ -119,19 +121,19 @@ func convertSingleMetric(metric models.Metrics) (*proto.Metric, error) {
 
 	switch metric.MType {
 	case "gauge":
-		pm.Type = proto.Metric_GAUGE
-		if metric.Value != nil {
-			pm.Value = *metric.Value
-		} else {
+		if metric.Value == nil {
 			return nil, fmt.Errorf("gauge metric %s has nil value", metric.ID)
 		}
+		pm.Type = proto.Metric_GAUGE
+		pm.Value = *metric.Value
+
 	case "counter":
-		pm.Type = proto.Metric_COUNTER
-		if metric.Delta != nil {
-			pm.Delta = *metric.Delta
-		} else {
+		if metric.Delta == nil {
 			return nil, fmt.Errorf("counter metric %s has nil delta", metric.ID)
 		}
+		pm.Type = proto.Metric_COUNTER
+		pm.Delta = *metric.Delta
+
 	default:
 		return nil, fmt.Errorf("unknown metric type: %s for metric %s", metric.MType, metric.ID)
 	}
