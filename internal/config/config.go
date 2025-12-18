@@ -17,15 +17,17 @@ import (
 // Значения загружаются из переменных окружения (указаны в тегах env)
 // или из флагов командной строки, если переменные окружения не установлены.
 type ConfigStruct struct {
-	Addr          string `json:"address"`
-	StoreInterval int    `json:"store_interval"`
-	FileStorage   string `json:"file_storage_path"`
-	Restore       bool   `json:"restore"`
-	AddrDB        string `json:"database_dsn"`
-	Key           string `json:"key"`
-	CryptoKeyPath string `json:"crypto_key"`
-	AuditFile     string `json:"audit_file"`
-	AuditURL      string `json:"audit_url"`
+	Addr           string `json:"address"`
+	StoreInterval  int    `json:"store_interval"`
+	FileStorage    string `json:"file_storage_path"`
+	TrustedSubnet  string `json:"trusted_subnet"`
+	Restore        bool   `json:"restore"`
+	AddrDB         string `json:"database_dsn"`
+	Key            string `json:"key"`
+	CryptoKeysPath string `json:"crypto_keys"`
+	AuditFile      string `json:"audit_file"`
+	AuditURL       string `json:"audit_url"`
+	GRPCAddr       string `json:"grpc_address"`
 }
 
 // generate:reset
@@ -40,6 +42,8 @@ type Config struct {
 	// FileStorage указывает путь к файлу для хранения метрик на диске.
 	FileStorage string `env:"FILE_STORAGE_PATH"`
 
+	TrustedSubnet string `env:"TRUSTED_SUBNET"`
+
 	ConfigFilePath string `env:"CONFIG"`
 
 	// Restore определяет, нужно ли восстанавливать метрики из файла при запуске сервера.
@@ -53,13 +57,16 @@ type Config struct {
 	// Пустое значение отключает проверку подписей.
 	Key string `env:"KEY"`
 
-	CryptoKeyPath string `env:"CRYPTO_KEY"`
+	CryptoKeysPath string `env:"CRYPTO_KEYS"`
 
 	// AuditFile указывает путь к файлу для записи аудит-логов.
 	AuditFile string `env:"AUDIT_FILE"`
 
 	// AuditURL содержит URL для отправки аудит-событий на внешний сервис.
 	AuditURL string `env:"AUDIT_URL"`
+
+	// GRPCAddr задает адрес и порт gRPC-сервера (например, "localhost:50051").
+	GRPCAddr string `env:"GRPC_ADDRESS"`
 }
 
 func NewConfigStruct() *ConfigStruct {
@@ -91,13 +98,15 @@ func GetConfig() (Config, error) {
 	addrFlag := flag.String("a", "localhost:8080", "HTTP server address")
 	storeIntFlag := flag.String("i", "300", "store interval in seconds")
 	fileFlag := flag.String("f", "storage.json", "path to storage file")
-	configPathFlag := flag.String("config", "../internal/config/config_example.json", "path to config file")
+	trustedSubnetFlag := flag.String("t", "", "trusted ip addreses")
+	configPathFlag := flag.String("config", "./internal/config/config_example.json", "path to config file")
 	restoreFlag := flag.String("r", "false", "restore metrics from file on startup (true/false)")
 	addrDBFlag := flag.String("d", "", "Database address")
 	key := flag.String("k", "hello", "Hash key")
-	cryptoKeyPath := flag.String("c", "../keys/private.pem", "crypto key")
+	cryptoKeysPath := flag.String("c", "./keys", "crypto keys path for creating")
 	auditFile := flag.String("p", "./audit.json", "audit file path")
 	auditURL := flag.String("u", "", "audit url")
+	grpcAddrFlag := flag.String("grpc", "localhost:5050", "gRPC server address")
 
 	flag.Parse()
 
@@ -109,18 +118,26 @@ func GetConfig() (Config, error) {
 		return Config{}, err
 	}
 
-	json.NewDecoder(data).Decode(configStruct)
+	err = json.NewDecoder(data).Decode(configStruct)
+	if err != nil {
+		err = json.NewDecoder(data).Decode(configStruct)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 
 	cfg := Config{
-		Addr:          getString(os.Getenv("ADDRESS"), *addrFlag, configStruct.Addr),
-		FileStorage:   getString(os.Getenv("FILE_STORAGE_PATH"), *fileFlag, configStruct.FileStorage),
-		StoreInterval: getInt(os.Getenv("STORE_INTERVAL"), *storeIntFlag, configStruct.StoreInterval),
-		Restore:       getBool(os.Getenv("RESTORE"), *restoreFlag, configStruct.Restore),
-		AddrDB:        getString(os.Getenv("DATABASE_DSN"), *addrDBFlag, configStruct.AddrDB),
-		Key:           getString(os.Getenv("KEY"), *key, configStruct.Key),
-		CryptoKeyPath: getString(os.Getenv("CRYPTO_KEY"), *cryptoKeyPath, configStruct.CryptoKeyPath),
-		AuditFile:     getString(os.Getenv("AUDIT_FILE"), *auditFile, configStruct.AuditFile),
-		AuditURL:      getString(os.Getenv("AUDIT_URL"), *auditURL, configStruct.AuditURL),
+		Addr:           getString(os.Getenv("ADDRESS"), *addrFlag, configStruct.Addr),
+		FileStorage:    getString(os.Getenv("FILE_STORAGE_PATH"), *fileFlag, configStruct.FileStorage),
+		TrustedSubnet:  getString(os.Getenv("TRUSTED_SUBNET"), *trustedSubnetFlag, configStruct.TrustedSubnet),
+		StoreInterval:  getInt(os.Getenv("STORE_INTERVAL"), *storeIntFlag, configStruct.StoreInterval),
+		Restore:        getBool(os.Getenv("RESTORE"), *restoreFlag, configStruct.Restore),
+		AddrDB:         getString(os.Getenv("DATABASE_DSN"), *addrDBFlag, configStruct.AddrDB),
+		Key:            getString(os.Getenv("KEY"), *key, configStruct.Key),
+		CryptoKeysPath: getString(os.Getenv("CRYPTO_KEYS"), *cryptoKeysPath, configStruct.CryptoKeysPath),
+		AuditFile:      getString(os.Getenv("AUDIT_FILE"), *auditFile, configStruct.AuditFile),
+		AuditURL:       getString(os.Getenv("AUDIT_URL"), *auditURL, configStruct.AuditURL),
+		GRPCAddr:       getString(os.Getenv("GRPC_ADDRESS"), *grpcAddrFlag, configStruct.GRPCAddr),
 	}
 
 	return cfg, nil

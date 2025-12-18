@@ -17,6 +17,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -53,8 +55,9 @@ func NewRouter(storage repository.Storage, sugar *zap.SugaredLogger, cfg config.
 	r := chi.NewRouter()
 
 	r.Use(LoggerMiddleware(sugar))
-	r.Use(DecryptMiddleware(cfg.CryptoKeyPath))
+	r.Use(DecryptMiddleware(cfg.CryptoKeysPath))
 	r.Use(HashValidationMiddleware(cfg.Key))
+	r.Use(TrustedIPMiddleware(cfg.TrustedSubnet))
 	r.Use(DecompressMiddleware())
 
 	r.Get("/", GetListHandler(storage))
@@ -104,6 +107,32 @@ func LoggerMiddleware(sugar *zap.SugaredLogger) func(h http.Handler) http.Handle
 				"status", responseData.Status,
 				"size", responseData.Size,
 			)
+		})
+	}
+}
+
+func TrustedIPMiddleware(trustedIP string) func(h http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			if trustedIP != "" {
+				clientIP := r.Header.Get("X-Real-IP")
+
+				if clientIP == "" {
+					log.Printf("WARNING: X-Real-IP header is missing from %s", r.RemoteAddr)
+					http.Error(rw, "X-Real-IP header required", http.StatusBadRequest)
+					return
+				}
+
+				if clientIP != trustedIP {
+					log.Printf("ERROR: Untrusted IP address: %s (expected: %s)", clientIP, trustedIP)
+					http.Error(rw, "forbidden", http.StatusForbidden)
+					return
+				}
+
+				log.Printf("INFO: Request from trusted IP: %s", clientIP)
+			}
+
+			h.ServeHTTP(rw, r)
 		})
 	}
 }
@@ -160,8 +189,14 @@ func DecompressMiddleware() func(h http.Handler) http.Handler {
 func DecryptMiddleware(privateKeyPath string) func(h http.Handler) http.Handler {
 	var privateKey *rsa.PrivateKey
 	if privateKeyPath != "" {
+
+		keyPath := privateKeyPath
+		if info, err := os.Stat(privateKeyPath); err == nil && info.IsDir() {
+			keyPath = filepath.Join(privateKeyPath, "private.pem")
+			log.Printf("INFO: Detected directory, using key file: %s", keyPath)
+		}
 		var err error
-		privateKey, err = cryptoutil.LoadPrivateKey(privateKeyPath)
+		privateKey, err = cryptoutil.LoadPrivateKey(keyPath)
 		if err != nil {
 			log.Printf("ERROR: failed to load private key: %v", err)
 		} else {

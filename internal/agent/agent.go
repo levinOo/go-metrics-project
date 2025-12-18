@@ -10,7 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,9 +24,96 @@ import (
 	"github.com/levinOo/go-metrics-project/internal/agent/config"
 	"github.com/levinOo/go-metrics-project/internal/agent/store"
 	"github.com/levinOo/go-metrics-project/internal/cryptoutil"
+	grpcClient "github.com/levinOo/go-metrics-project/internal/grpc"
+	"github.com/levinOo/go-metrics-project/internal/logger"
 	"github.com/levinOo/go-metrics-project/internal/models"
 )
 
+// SendAllMetricsBatchGRPC отправляет метрики через gRPC
+func SendAllMetricsBatchGRPC(ctx context.Context, client *grpcClient.GRPCClient, m store.Metrics, rateLimit int) error {
+	metrics := m.ValuesAllTyped()
+	var metricsList []models.Metrics
+
+	inputCh := make(chan models.Metrics)
+	errCh := make(chan error)
+
+	go func() {
+		defer close(inputCh)
+		for name, metric := range metrics {
+			inputCh <- models.Metrics{
+				ID:    name,
+				MType: metric.Type(),
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for w := 1; w <= rateLimit; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for metric := range inputCh {
+				var err error
+				switch metric.MType {
+				case "gauge":
+					metric.Value = new(float64)
+					*metric.Value, err = strconv.ParseFloat(metrics[metric.ID].String(), 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse gauge value for %s: %w", metric.ID, err)
+						return
+					}
+				case "counter":
+					metric.Delta = new(int64)
+					*metric.Delta, err = strconv.ParseInt(metrics[metric.ID].String(), 10, 64)
+					if err != nil {
+						errCh <- fmt.Errorf("failed to parse counter value for %s: %w", metric.ID, err)
+						return
+					}
+				default:
+					errCh <- fmt.Errorf("unknown metric type: %s for metric %s", metric.MType, metric.ID)
+					return
+				}
+
+				mu.Lock()
+				metricsList = append(metricsList, metric)
+				mu.Unlock()
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+
+	// Получаем IP агента
+	agentIP, err := grpcClient.GetAgentIP()
+	if err != nil {
+		return fmt.Errorf("failed to get agent IP: %w", err)
+	}
+
+	// Отправляем через gRPC с IP в метаданных
+	return client.SendMetrics(ctx, convertToInterface(metricsList), agentIP)
+}
+
+// convertToInterface преобразует срез метрик в interface{} для gRPC клиента
+func convertToInterface(metrics []models.Metrics) []interface{} {
+	result := make([]interface{}, len(metrics))
+	for i, m := range metrics {
+		result[i] = m
+	}
+	return result
+}
+
+// SendAllMetricsBatch - оригинальная HTTP функция (оставляем для обратной совместимости)
 func SendAllMetricsBatch(client *http.Client, endpoint string, m store.Metrics, key string, rateLimit int, publicKey *rsa.PublicKey) error {
 	metrics := m.ValuesAllTyped()
 	var metricsList []models.Metrics
@@ -139,6 +226,13 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string, pub
 		req.Header.Set("HashSHA256", hashString)
 	}
 
+	ip, err := getLocalIP()
+	if err != nil {
+		return fmt.Errorf("could not find IP address")
+	}
+
+	req.Header.Set("X-Real-IP", ip)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch request: %w", err)
@@ -150,6 +244,23 @@ func sendMetricsBatch(metrics []models.Metrics, endpoint string, key string, pub
 	}
 
 	return nil
+}
+
+func getLocalIP() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("не удалось найти IP-адрес")
 }
 
 func customBackoff(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
@@ -189,24 +300,46 @@ func CompressData(data []byte) ([]byte, error) {
 }
 
 type Config struct {
-	Addr          string `env:"ADDRESS"`
-	Key           string `env:"KEY"`
-	PollInterval  int    `env:"POLL_INTERVAL"`
-	ReqInterval   int    `env:"REPORT_INTERVAL"`
-	RateLimit     int    `env:"RATE_LIMIT"`
-	CryptoKeyPath string `env:"CRYPTO_KEY"`
+	Addr           string `env:"ADDRESS"`
+	Key            string `env:"KEY"`
+	PollInterval   int    `env:"POLL_INTERVAL"`
+	ReqInterval    int    `env:"REPORT_INTERVAL"`
+	RateLimit      int    `env:"RATE_LIMIT"`
+	CryptoKeyPath  string `env:"CRYPTO_KEY"`
+	UseGRPC        bool   `env:"USE_GRPC"` // Новый флаг для выбора протокола
+	GRPCServerAddr string `env:"GRPC_SERVER_ADDRESS"`
 }
 
 func StartAgent() <-chan error {
+	sugar := logger.NewLogger()
+
 	cfg := config.NewConfig()
-	config.GetAgentConfig(cfg)
+	config.GetAgentConfig(cfg, sugar)
 
 	errCh := make(chan error)
 
-	publicKey, err := cryptoutil.LoadPublicKey(cfg.CryptoKeyPath)
-	if err != nil {
-		errCh <- fmt.Errorf("ошибка создвния Public key: %w", err)
-		return errCh
+	// Инициализация в зависимости от протокола
+	var grpcCli *grpcClient.GRPCClient
+	var publicKey *rsa.PublicKey
+	var err error
+
+	if cfg.UseGRPC {
+		// Создаем gRPC клиент
+		grpcCli, err = grpcClient.NewGRPCClient(cfg.GRPCServerAddr)
+		if err != nil {
+			errCh <- fmt.Errorf("ошибка создания gRPC клиента: %w", err)
+			return errCh
+		}
+		defer grpcCli.Close()
+		sugar.Infof("Using gRPC protocol to %s", cfg.GRPCServerAddr)
+	} else {
+		// Загружаем публичный ключ для HTTP
+		publicKey, err = cryptoutil.LoadPublicKey(cfg.CryptoKeyPath)
+		if err != nil {
+			errCh <- fmt.Errorf("ошибка создания Public key: %w", err)
+			return errCh
+		}
+		sugar.Infof("Using HTTP protocol to %s", cfg.Addr)
 	}
 
 	m := store.NewMetricsStorage()
@@ -245,10 +378,17 @@ func StartAgent() <-chan error {
 					semaphore <- struct{}{}
 					defer func() { <-semaphore }()
 
-					err := SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit, publicKey)
+					var err error
+					if cfg.UseGRPC {
+						// Отправка через gRPC
+						err = SendAllMetricsBatchGRPC(ctx, grpcCli, *m, cfg.RateLimit)
+					} else {
+						// Отправка через HTTP
+						err = SendAllMetricsBatch(&http.Client{}, endpoint, *m, cfg.Key, cfg.RateLimit, publicKey)
+					}
 
 					if err != nil {
-						log.Printf("Final sending metrics error: %v", err)
+						sugar.Errorf("Final sending metrics error: %v", err)
 					}
 				}()
 			}
@@ -257,7 +397,7 @@ func StartAgent() <-chan error {
 
 	for {
 		<-quit
-		log.Printf("Running graceful shutdown")
+		sugar.Infof("Running graceful shutdown")
 		cancel()
 		break
 	}
@@ -265,7 +405,7 @@ func StartAgent() <-chan error {
 	go func() {
 		wg.Wait()
 		close(errCh)
-		log.Printf("Graceful shutdown completed")
+		sugar.Infof("Graceful shutdown completed")
 	}()
 
 	return errCh
